@@ -20,10 +20,11 @@ const DEFAULT_HUD: HUDState = {
 export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
   const canvasRef  = useRef<HTMLCanvasElement>(null)
   const engineRef  = useRef<GameEngine | null>(null)
-  const [hudState, setHudState]       = useState<HUDState>({ ...DEFAULT_HUD })
-  const [loading, setLoading]         = useState(true)
-  const [muted, setMuted]             = useState(false)
+  const [hudState, setHudState]         = useState<HUDState>({ ...DEFAULT_HUD })
+  const [loading, setLoading]           = useState(true)
+  const [muted, setMuted]               = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([])
+  const [noclipActive, setNoclipActive] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -32,10 +33,8 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
     const engine = new GameEngine()
     engineRef.current = engine
 
-    // Wire chat messages from network → React state
-    engine.onChatMessage = (msg) => {
-      setChatMessages(prev => [...prev, { ...msg, ts: Date.now() }])
-    }
+    engine.onChatMessage  = (msg) => setChatMessages(prev => [...prev, { ...msg, ts: Date.now() }])
+    engine.onNoclipChange = (active) => setNoclipActive(active)
 
     engine.init(canvas, 'bmw', nickname, (state) => {
       setHudState(state)
@@ -58,7 +57,13 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
     setMuted(prev => { const next = !prev; engineRef.current?.setMute(next); return next })
   }, [])
   const handleTimeToggle = useCallback(() => { engineRef.current?.toggleTimeOfDay() }, [])
-  const handleSendChat   = useCallback((text: string) => { engineRef.current?.sendChat(text) }, [])
+  const handleSendChat = useCallback((text: string) => {
+    if (text.trim().toLowerCase() === '/noclip') {
+      engineRef.current?.toggleNoclip()
+    } else {
+      engineRef.current?.sendChat(text)
+    }
+  }, [])
 
   // Pointer lock — grab on click OR keydown so user doesn't need to click first
   useEffect(() => {
@@ -119,6 +124,18 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
           onBack={onBack}
           muted={muted}
         />
+      )}
+
+      {/* Noclip indicator */}
+      {noclipActive && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none select-none">
+          <div
+            className="px-4 py-1.5 rounded text-sm font-mono tracking-widest"
+            style={{ background: 'rgba(0,255,100,0.15)', border: '1px solid rgba(0,255,100,0.4)', color: '#00ff64', textShadow: '0 0 8px #00ff64' }}
+          >
+            NOCLIP  ·  W/S forward  ·  A/D strafe  ·  Mouse look  ·  ESC or /noclip to exit
+          </div>
+        </div>
       )}
 
       {/* Chat */}

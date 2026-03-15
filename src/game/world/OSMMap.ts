@@ -169,8 +169,9 @@ export class OSMMap {
         if (geo) pushGeo(bldgGeos, color, geo)
       } catch { /* malformed polygon — skip */ }
 
-      // Physics AABB for buildings within 300m
-      if (dist2 < 300 * 300 && pts.length >= 3) {
+      // Physics AABB — skip the central 80m plaza (roads start at ~90m)
+      // so the spawn area stays open; cover 80–400m ring
+      if (dist2 > 80 * 80 && dist2 < 400 * 400 && pts.length >= 3) {
         let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
         for (const [x, z] of pts) {
           if (x < minX) minX = x; if (x > maxX) maxX = x

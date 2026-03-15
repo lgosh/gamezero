@@ -79,6 +79,13 @@ export class GameEngine {
   private networkSendTimer = 0
   onChatMessage?: (msg: ChatMessage) => void
 
+  // Noclip (free camera fly mode)
+  private noclipMode  = false
+  private noclipPos   = new THREE.Vector3()
+  private noclipYaw   = 0
+  private noclipPitch = 0
+  onNoclipChange?: (active: boolean) => void
+
   // Smoke timer
   private smokeTimer = 0
 
@@ -158,9 +165,10 @@ export class GameEngine {
     this.map = new OSMMap(this.scene, this.physicsWorld)
     await this.map.build()
 
-    // ─── Cars — spawned on Rustaveli Ave near Freedom Square ─────────────────
-    const mercedesPos = new THREE.Vector3(-10, 2.0, -10)
-    const bmwPos      = new THREE.Vector3(  5, 2.0, -10)
+    // ─── Cars — spawned on the west road of Freedom Square (Shalva Dadiani) ──
+    // Roads begin at ~90 m from the monument; x≈-85 keeps us clear of building physics
+    const mercedesPos = new THREE.Vector3(-90, 2.0,  8)
+    const bmwPos      = new THREE.Vector3(-90, 2.0, -8)
 
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
     const bmw      = new BMW(this.scene, this.physicsWorld)
@@ -193,7 +201,7 @@ export class GameEngine {
     // Both cars parked at start — player spawns on foot between them to choose
     this.car.chassisBody.sleep()
     this.parkedCar.chassisBody.sleep()
-    const playerStart = new THREE.Vector3(0, 1.0, -10)
+    const playerStart = new THREE.Vector3(-90, 1.0, 0)
     this.player = new Player(this.scene, this.physicsWorld, playerStart, 0)
     this.gameMode = 'onfoot'
 
@@ -280,10 +288,14 @@ export class GameEngine {
     const rawDt = this.clock.getDelta()
     const dt = Math.min(rawDt, 0.05) // cap at 50ms to avoid spiral of death
 
-    // ESC toggles pause regardless of current state (check every frame)
+    // ESC: exit noclip first; otherwise toggle pause
     const input = this.inputManager.getState(dt)
-    if (input.pauseToggle && this.state !== 'crashed') {
-      this.togglePause()
+    if (input.pauseToggle) {
+      if (this.noclipMode) {
+        this.toggleNoclip()
+      } else if (this.state !== 'crashed') {
+        this.togglePause()
+      }
     }
 
     // F — exit/enter car
@@ -303,11 +315,35 @@ export class GameEngine {
   }
 
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
-    // Physics step
+    // Physics step (always runs — keeps remote players alive during noclip too)
     this.physicsWorld.step(dt)
-    // Override remote-driven cars' positions BEFORE any syncVisual calls
     this.updateRemoteCars()
     this.map.syncProps()
+
+    // ── Noclip (free camera fly) ──────────────────────────────────────────
+    if (this.noclipMode) {
+      // Mouse → rotate
+      this.noclipYaw   -= input.mouseDx * 0.003
+      this.noclipPitch -= input.mouseDy * 0.003
+      this.noclipPitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.noclipPitch))
+
+      // Build camera quaternion from yaw + pitch (YXZ equivalent via quaternion multiply)
+      const yawQ   = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.noclipYaw)
+      const pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.noclipPitch)
+      this.camera.quaternion.copy(yawQ).multiply(pitchQ)
+
+      // W/S = forward/back along look direction, A/D = horizontal strafe
+      const dir = new THREE.Vector3()
+      this.camera.getWorldDirection(dir)
+      const right = new THREE.Vector3(Math.cos(this.noclipYaw), 0, Math.sin(this.noclipYaw))
+      const speed = 80 * dt
+      this.noclipPos.addScaledVector(dir,   speed * (input.throttle - input.brake))
+      this.noclipPos.addScaledVector(right, speed * input.steering)
+      this.camera.position.copy(this.noclipPos)
+
+      for (const rp of this.remotePlayers.values()) rp.update(dt)
+      return
+    }
 
     let currentPlayerPos = { x: 0, z: 0 }
     let currentHeading = 0
@@ -535,7 +571,7 @@ export class GameEngine {
     }
     this.gameMode = 'driving'
 
-    const startPos = new THREE.Vector3(0, 2.0, -10)
+    const startPos = new THREE.Vector3(-90, 2.0, 0)
     this.car.reset(startPos)
     this.smoothCarYInit = false
     this.car.chassisBody.wakeUp()
@@ -572,6 +608,23 @@ export class GameEngine {
 
   sendChat(text: string) {
     this.network?.sendChat(text)
+  }
+
+  toggleNoclip(): boolean {
+    this.noclipMode = !this.noclipMode
+    if (this.noclipMode) {
+      // Snapshot current camera position + look direction
+      this.noclipPos.copy(this.camera.position)
+      const dir = new THREE.Vector3()
+      this.camera.getWorldDirection(dir)
+      this.noclipYaw   = Math.atan2(dir.x, -dir.z)
+      this.noclipPitch = Math.asin(Math.max(-1, Math.min(1, dir.y)))
+    } else {
+      // Hand camera back to the normal camera system on the next frame
+      this.cameraSystem.reset()
+    }
+    this.onNoclipChange?.(this.noclipMode)
+    return this.noclipMode
   }
 
   toggleTimeOfDay() {
