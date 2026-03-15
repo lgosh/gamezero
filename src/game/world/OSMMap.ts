@@ -50,13 +50,29 @@ function flushBucket(bucket: GeoBucket, scene: THREE.Scene, castShadow = false) 
     const merged = mergeGeometries(geos, false)
     if (!merged) continue
     for (const g of geos) g.dispose()
-    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9 })
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0.0 })
     const mesh = new THREE.Mesh(merged, mat)
     mesh.castShadow  = castShadow
     mesh.receiveShadow = true
     scene.add(mesh)
   }
   bucket.clear()
+}
+
+// ── Internal building definition ───────────────────────────────────────────
+interface BuildingDef {
+  ring: Array<[number, number]>   // deduplicated ring (last != first)
+  height: number
+  cx: number   // centroid X
+  cz: number   // centroid Z
+  dist: number // distance from origin
+  name?: string
+}
+
+// ── Seeded pseudo-random for deterministic window assignment ───────────────
+function seededPseudoRandom(wx: number, wz: number, floor: number): number {
+  const h = Math.sin(wx * 127.1 + wz * 311.7 + floor * 74.3) * 43758.5453
+  return h - Math.floor(h)
 }
 
 // ── Main OSMMap class ──────────────────────────────────────────────────────
@@ -147,33 +163,61 @@ export class OSMMap {
     }
 
     // ── 3. Buildings ──────────────────────────────────────────────────────
+    // Collect BuildingDef list; detect monument way
+    const buildingDefs: BuildingDef[] = []
+    let monumentCx = -137
+    let monumentCz = -136
+
     for (const way of ways) {
       if (!way.tags?.building) continue
+      const tags = way.tags
+
       const pts = resolvePolyline(way.nodes, nodeMap)
       if (pts.length < 3) continue
 
-      // Centroid for distance check
+      // Deduplicate closed ring
+      const ring: Array<[number, number]> = (
+        pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1]
+      ) ? pts.slice(0, -1) : pts
+      if (ring.length < 3) continue
+
+      // Centroid
       let cx = 0, cz = 0
-      for (const [x, z] of pts) { cx += x; cz += z }
-      cx /= pts.length; cz /= pts.length
+      for (const [x, z] of ring) { cx += x; cz += z }
+      cx /= ring.length
+      cz /= ring.length
 
-      const dist2 = cx * cx + cz * cz
-      if (dist2 > 500 * 500) continue
+      const dist = Math.sqrt(cx * cx + cz * cz)
 
-      const tags   = way.tags
+      // Detect monument way — capture its centroid and skip rendering the flat 0.5m footprint
+      if (tags.historic === 'monument') {
+        monumentCx = cx
+        monumentCz = cz
+        continue
+      }
+
+      if (dist > 500) continue
+
       const height = parseHeight(tags)
-      const color  = BLDG_COLORS[Math.abs(Math.round(cx * 7 + cz * 13)) % BLDG_COLORS.length]
+      const name = (tags['name:en'] || tags['name']) as string | undefined
+
+      buildingDefs.push({ ring, height, cx, cz, dist, name })
+    }
+
+    // Push building geometry into bucket + physics
+    for (const def of buildingDefs) {
+      const { ring, height, cx, cz, dist } = def
+      const color = BLDG_COLORS[Math.abs(Math.round(cx * 7 + cz * 13)) % BLDG_COLORS.length]
 
       try {
-        const geo = buildExtrudedGeo(pts, height)
+        const geo = buildExtrudedGeo(ring, height)
         if (geo) pushGeo(bldgGeos, color, geo)
       } catch { /* malformed polygon — skip */ }
 
-      // Physics AABB — skip the central 80m plaza (roads start at ~90m)
-      // so the spawn area stays open; cover 80–400m ring
-      if (dist2 > 80 * 80 && dist2 < 400 * 400 && pts.length >= 3) {
+      // Physics AABB — skip the central 80m plaza; cover 80–400m ring
+      if (dist > 80 && dist < 400 && ring.length >= 3) {
         let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity
-        for (const [x, z] of pts) {
+        for (const [x, z] of ring) {
           if (x < minX) minX = x; if (x > maxX) maxX = x
           if (z < minZ) minZ = z; if (z > maxZ) maxZ = z
         }
@@ -193,50 +237,201 @@ export class OSMMap {
     flushBucket(roadGeos,  this.scene, false)
     flushBucket(bldgGeos,  this.scene, true)
 
-    // ── 5. Landmarks ──────────────────────────────────────────────────────
-    this.addLibertyMonument()
+    // ── 5. Windows (InstancedMesh) ─────────────────────────────────────────
+    this.addWindows(buildingDefs)
+
+    // ── 6. Building name signs (Sprites) ──────────────────────────────────
+    this.addSigns(buildingDefs)
+
+    // ── 7. Landmarks ──────────────────────────────────────────────────────
+    this.addLibertyMonument(monumentCx, monumentCz)
     this.addStreetLamps()
 
-    // ── 6. Boundary walls ─────────────────────────────────────────────────
+    // ── 8. Boundary walls + road closure barriers ─────────────────────────
     for (const [x, z, hw, hd] of [
       [0,  900, 900, 5], [0, -900, 900, 5],
       [900,  0, 5, 900], [-900, 0, 5, 900],
     ] as const) {
       this.physics.addStaticBox(new CANNON.Vec3(hw, 50, hd), new CANNON.Vec3(x, 50, z))
     }
+    this.addRoadBarriers()
   }
 
-  // ── Liberty Monument (St George Column) ──────────────────────────────────
-  private addLibertyMonument() {
-    const stoneMat  = new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: 0.8 })
-    const goldMat   = new THREE.MeshStandardMaterial({ color: 0xd4a020, metalness: 0.6, roughness: 0.4 })
+  // ── Windows using InstancedMesh ───────────────────────────────────────────
+  private addWindows(buildings: BuildingDef[]) {
+    const WINDOW_FLOORS = [1.3, 4.5, 7.7, 10.9]
+    const WINDOW_SPACING = 2.4
+    const WINDOW_OFFSET = 0.08
+    const MAX_DIST = 280
 
-    // Base pedestal
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.8, 3, 16), stoneMat)
-    base.position.set(0, 1.5, 0)
-    base.castShadow = true
-    this.scene.add(base)
+    const windowGeo = new THREE.PlaneGeometry(0.65, 0.9)
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: new THREE.Color(0.04, 0.05, 0.06),
+      roughness: 0.05,
+      metalness: 0.1,
+      side: THREE.DoubleSide,
+    })
 
-    // Column
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.4, 32, 16), stoneMat)
-    col.position.set(0, 19, 0)
-    col.castShadow = true
-    this.scene.add(col)
+    // Count max instances needed
+    const MAX_INSTANCES = 50000
+    const mesh = new THREE.InstancedMesh(windowGeo, windowMat, MAX_INSTANCES)
+    mesh.castShadow = false
+    mesh.receiveShadow = false
 
-    // Capital ring
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 1.1, 2, 16), stoneMat)
-    cap.position.set(0, 36, 0)
-    this.scene.add(cap)
+    const dummy = new THREE.Object3D()
+    const litColor = new THREE.Color(0xffcc44)
+    const darkColor = new THREE.Color(0x2a3545)
+    let count = 0
 
-    // St George sphere (stand-in for statue)
-    const statue = new THREE.Mesh(new THREE.SphereGeometry(1.6, 12, 10), goldMat)
-    statue.position.set(0, 38.8, 0)
-    statue.castShadow = true
-    this.scene.add(statue)
+    for (const def of buildings) {
+      if (def.dist > MAX_DIST) continue
+      if (count >= MAX_INSTANCES) break
 
-    // Physics for column
-    this.physics.addStaticBox(new CANNON.Vec3(1.2, 18, 1.2), new CANNON.Vec3(0, 18, 0))
-    this.physics.addStaticBox(new CANNON.Vec3(5.8, 1.5, 5.8), new CANNON.Vec3(0, 1.5, 0))
+      const { ring, height } = def
+      const maxFloor = Math.min(WINDOW_FLOORS.length, Math.ceil(height / 3.2))
+
+      for (let ei = 0; ei < ring.length; ei++) {
+        if (count >= MAX_INSTANCES) break
+
+        const [ax, az] = ring[ei]
+        const [bx, bz] = ring[(ei + 1) % ring.length]
+        const dx = bx - ax
+        const dz = bz - az
+        const edgeLen = Math.sqrt(dx * dx + dz * dz)
+        if (edgeLen < 1.0) continue
+
+        // Outward normal (left perpendicular for CW in game space)
+        const nx = -(dz) / edgeLen
+        const nz = (dx) / edgeLen
+
+        const windowCount = Math.floor(edgeLen / WINDOW_SPACING)
+        if (windowCount < 1) continue
+
+        // Centre windows along the edge
+        const step = edgeLen / windowCount
+        const startOffset = step / 2
+
+        for (let wi = 0; wi < windowCount; wi++) {
+          if (count >= MAX_INSTANCES) break
+
+          const t = (startOffset + wi * step) / edgeLen
+          const wx = ax + dx * t + nx * WINDOW_OFFSET
+          const wz = az + dz * t + nz * WINDOW_OFFSET
+
+          for (let fi = 0; fi < maxFloor; fi++) {
+            if (count >= MAX_INSTANCES) break
+
+            const wy = WINDOW_FLOORS[fi]
+            if (wy >= height - 0.5) continue
+
+            dummy.position.set(wx, wy, wz)
+            // Face outward: rotate Y to align with outward normal
+            dummy.rotation.set(0, Math.atan2(nx, nz), 0)
+            dummy.updateMatrix()
+            mesh.setMatrixAt(count, dummy.matrix)
+
+            const rand = seededPseudoRandom(wx, wz, fi)
+            const color = rand < 0.35 ? litColor : darkColor
+            mesh.setColorAt(count, color)
+
+            count++
+          }
+        }
+      }
+    }
+
+    mesh.count = count
+    mesh.instanceMatrix.needsUpdate = true
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+
+    this.scene.add(mesh)
+  }
+
+  // ── Building name signs (Sprites) ─────────────────────────────────────────
+  private addSigns(buildings: BuildingDef[]) {
+    const MAX_DIST = 350
+
+    for (const def of buildings) {
+      if (!def.name) continue
+      if (def.dist > MAX_DIST) continue
+      if (def.name.length >= 40) continue
+
+      const name = def.name
+
+      // Canvas texture
+      const canvas = document.createElement('canvas')
+      canvas.width  = 512
+      canvas.height = 72
+      const ctx = canvas.getContext('2d')!
+
+      // Background
+      ctx.fillStyle = 'rgba(0,0,0,0.72)'
+      ctx.fillRect(0, 0, 512, 72)
+
+      // Left blue stripe
+      ctx.fillStyle = '#3b82f6'
+      ctx.fillRect(0, 0, 4, 72)
+
+      // White bold text
+      ctx.fillStyle = '#ffffff'
+      ctx.font = 'bold 24px Arial'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(name, 14, 36)
+
+      const texture = new THREE.CanvasTexture(canvas)
+      const spriteMat = new THREE.SpriteMaterial({
+        map: texture,
+        depthTest: false,
+        transparent: true,
+      })
+
+      const sprite = new THREE.Sprite(spriteMat)
+      const scaleX = name.length * 0.32 + 2
+      sprite.scale.set(scaleX, 1.0, 1)
+      sprite.position.set(def.cx, def.height + 2, def.cz)
+      sprite.renderOrder = 999
+
+      this.scene.add(sprite)
+    }
+  }
+
+  // ── Liberty Monument (St George Column) ───────────────────────────────────
+  private addLibertyMonument(cx: number, cz: number) {
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: 0.8 })
+    const goldMat  = new THREE.MeshStandardMaterial({ color: 0xd4a020, metalness: 0.6, roughness: 0.4 })
+
+    const add = (mesh: THREE.Mesh) => { mesh.castShadow = true; this.scene.add(mesh) }
+
+    // Stepped platform (3 discs, each slightly smaller and taller)
+    const p0 = new THREE.Mesh(new THREE.CylinderGeometry(7, 7.5, 1.0, 32), stoneMat)
+    p0.position.set(cx, 0.5, cz); add(p0)
+    const p1 = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 6.0, 1.0, 32), stoneMat)
+    p1.position.set(cx, 1.5, cz); add(p1)
+    const p2 = new THREE.Mesh(new THREE.CylinderGeometry(4.0, 4.5, 1.2, 32), stoneMat)
+    p2.position.set(cx, 2.6, cz); add(p2)
+
+    // Column base block (transitions pedestal → column)
+    const baseBlock = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.5, 1.5, 16), stoneMat)
+    baseBlock.position.set(cx, 3.95, cz); add(baseBlock)
+
+    // Column shaft
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.7, 32, 16), stoneMat)
+    col.position.set(cx, 20.7, cz); add(col)
+
+    // Capital (corinthian-ish widening)
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 1.1, 2, 16), stoneMat)
+    cap.position.set(cx, 37.7, cz); add(cap)
+
+    // Orb + statue (stand-in for St George)
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(1.0, 12, 8), stoneMat)
+    orb.position.set(cx, 39.7, cz); add(orb)
+    const statue = new THREE.Mesh(new THREE.SphereGeometry(1.4, 12, 10), goldMat)
+    statue.position.set(cx, 41.4, cz); add(statue)
+
+    // Physics
+    this.physics.addStaticBox(new CANNON.Vec3(7.5, 1.5, 7.5), new CANNON.Vec3(cx, 1.5, cz))
+    this.physics.addStaticBox(new CANNON.Vec3(1.8, 18, 1.8), new CANNON.Vec3(cx, 20.7, cz))
   }
 
   // ── Street lamps along Rustaveli Ave ──────────────────────────────────────
@@ -255,6 +450,49 @@ export class OSMMap {
       // Right side
       createStreetLamp(this.scene, cx - perpDir.x * 8, cz - perpDir.y * 8, lampYaw + Math.PI)
     }
+  }
+
+  // ── Road closure barriers at map boundaries (4 InstancedMesh, one per wall) ─
+  private addRoadBarriers() {
+    const barrierGeo = new THREE.PlaneGeometry(8, 3)
+    const barrierMat = new THREE.MeshStandardMaterial({
+      color: 0xdd2222,
+      emissive: new THREE.Color(0.4, 0.07, 0.07),
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+    })
+
+    const N = 200          // panels per wall
+    const W = 900          // wall distance from origin
+    const spacing = (W * 2) / N   // 9m between panels
+
+    const dummy = new THREE.Object3D()
+
+    // Helper: build one wall's InstancedMesh
+    const makeWall = (
+      placeFn: (i: number, d: THREE.Object3D) => void,
+      rotY: number
+    ) => {
+      const im = new THREE.InstancedMesh(barrierGeo, barrierMat, N)
+      for (let i = 0; i < N; i++) {
+        placeFn(i, dummy)
+        dummy.rotation.set(0, rotY, 0)
+        dummy.updateMatrix()
+        im.setMatrixAt(i, dummy.matrix)
+      }
+      im.instanceMatrix.needsUpdate = true
+      this.scene.add(im)
+    }
+
+    // North z=-W  (face south = +Z)
+    makeWall((i, d) => d.position.set(-W + i * spacing + spacing / 2, 1.5, -W), 0)
+    // South z=+W  (face north = -Z)
+    makeWall((i, d) => d.position.set(-W + i * spacing + spacing / 2, 1.5,  W), Math.PI)
+    // East  x=+W  (face west  = -X)
+    makeWall((i, d) => d.position.set( W, 1.5, -W + i * spacing + spacing / 2), -Math.PI / 2)
+    // West  x=-W  (face east  = +X)
+    makeWall((i, d) => d.position.set(-W, 1.5, -W + i * spacing + spacing / 2),  Math.PI / 2)
   }
 }
 

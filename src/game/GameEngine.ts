@@ -198,6 +198,19 @@ export class GameEngine {
     wireImpact(mercedes)
     wireImpact(bmw)
 
+    // Orient both cars to face the Freedom Monument at (-137, -136)
+    // from spawn x=-90: heading = atan2(dx, dz) where +Z is "forward 0"
+    const monX = -137, monZ = -136
+    const facingHeading = (spawnZ: number) =>
+      Math.atan2(monX - (-90), monZ - spawnZ)
+    const setFacing = (body: typeof bmw.chassisBody, spawnZ: number) => {
+      const h = facingHeading(spawnZ)
+      body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
+      body.previousQuaternion.copy(body.quaternion)
+    }
+    setFacing(bmw.chassisBody,      bmwPos.z)
+    setFacing(mercedes.chassisBody, mercedesPos.z)
+
     // Both cars parked at start — player spawns on foot between them to choose
     this.car.chassisBody.sleep()
     this.parkedCar.chassisBody.sleep()
