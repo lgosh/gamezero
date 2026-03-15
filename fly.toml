@@ -1,0 +1,19 @@
+# fly.toml — Tbilisi Drive
+# Deploy: fly deploy
+
+app = "tbilisi-drive"
+primary_region = "ams"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1        # keep alive — no cold starts for players
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

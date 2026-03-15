@@ -35,9 +35,13 @@ export class NetworkManager {
   onConnected?: (id: string, existing: RemotePlayerData[]) => void
 
   connect(nickname: string) {
-    // Connect to same hostname, port 3001
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = import.meta.env.VITE_WS_URL ?? `${protocol}://${location.hostname}:3001`
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    // Dev  → local Bun server on :3001
+    // Prod → same host, /ws path (Fly.io single-process server)
+    const url = (import.meta.env.VITE_WS_URL as string | undefined)
+      ?? (import.meta.env.DEV
+        ? `ws://${location.hostname}:3001`
+        : `${proto}://${location.host}/ws`)
 
     console.log(`[Network] Connecting to ${url}`)
     this.ws = new WebSocket(url)

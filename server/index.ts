@@ -1,6 +1,7 @@
 /**
- * Tbilisi Drive — Multiplayer WebSocket Server
- * Run with: bun run server/index.ts
+ * Tbilisi Drive — Server
+ * - Local dev:  bun run server/index.ts  (WebSocket on :3001)
+ * - Production: serves static dist/ + WebSocket at /ws on $PORT (Fly.io)
  */
 
 type WSData = { id: string }
@@ -16,24 +17,48 @@ interface PlayerState {
 }
 
 const players = new Map<string, PlayerState>()
-const sockets = new Map<string, ReturnType<typeof Bun.serve>['upgrade'] extends (...a: any[]) => infer R ? any : any>()
+const sockets = new Map<string, any>()
+
+const PORT   = parseInt(process.env.PORT ?? '3001')
+const IS_PROD = !!process.env.FLY_APP_NAME  // Fly.io sets this automatically
 
 const server = Bun.serve<WSData>({
-  port: 3001,
+  port: PORT,
 
-  fetch(req, server) {
-    const id = crypto.randomUUID()
-    const upgraded = server.upgrade(req, { data: { id } })
-    if (upgraded) return
+  async fetch(req, server) {
+    const url = new URL(req.url)
+
+    // ── WebSocket upgrade ───────────────────────────────────────────────────
+    if (url.pathname === '/ws' || !IS_PROD) {
+      if (req.headers.get('Upgrade') === 'websocket') {
+        const id = crypto.randomUUID()
+        if (server.upgrade(req, { data: { id } })) return
+        return new Response('WebSocket upgrade failed', { status: 426 })
+      }
+    }
+
+    // ── Static file serving (production only) ───────────────────────────────
+    if (IS_PROD) {
+      let filePath = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\//, '')
+      const file = Bun.file(`./dist/${filePath}`)
+
+      if (await file.exists()) {
+        return new Response(file)
+      }
+
+      // SPA fallback — all unknown routes serve index.html
+      return new Response(Bun.file('./dist/index.html'))
+    }
+
     return new Response(
-      JSON.stringify({ status: 'Tbilisi Drive WebSocket Server', players: players.size }),
-      { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } }
+      JSON.stringify({ status: 'Tbilisi Drive WS Server', players: players.size }),
+      { headers: { 'Content-Type': 'application/json' } }
     )
   },
 
   websocket: {
     open(ws) {
-      console.log(`[+] Connection ${ws.data.id}`)
+      console.log(`[+] ${ws.data.id.slice(0, 8)}`)
     },
 
     message(ws, raw) {
@@ -45,25 +70,19 @@ const server = Bun.serve<WSData>({
         const nickname = String(msg.nickname ?? 'Player').trim().slice(0, 20) || 'Player'
         const state: PlayerState = {
           id, nickname,
-          pos: [0, 2, 35],
-          quat: [0, 0, 0, 1],
-          vel: [0, 0, 0],
-          mode: 'onfoot',
-          speedKmh: 0,
+          pos: [0, 2, 35], quat: [0, 0, 0, 1], vel: [0, 0, 0],
+          mode: 'onfoot', speedKmh: 0,
         }
         players.set(id, state)
         sockets.set(id, ws)
 
-        // Welcome: send this client their ID + all currently online players
         ws.send(JSON.stringify({
           type: 'welcome',
           id,
           players: [...players.values()].filter(p => p.id !== id),
         }))
-
-        // Notify everyone else
         broadcast(id, { type: 'player_joined', id, nickname })
-        console.log(`[join] ${nickname} (${id.slice(0, 8)}) — ${players.size} online`)
+        console.log(`[join] ${nickname} — ${players.size} online`)
         return
       }
 
@@ -105,25 +124,21 @@ const server = Bun.serve<WSData>({
 function broadcast(excludeId: string, msg: object) {
   const data = JSON.stringify(msg)
   for (const [id, ws] of sockets) {
-    if (id !== excludeId) (ws as any).send(data)
+    if (id !== excludeId) ws.send(data)
   }
 }
 
 function broadcastAll(msg: object) {
   const data = JSON.stringify(msg)
-  for (const ws of sockets.values()) {
-    (ws as any).send(data)
-  }
+  for (const ws of sockets.values()) ws.send(data)
 }
 
-// Broadcast all player states to all clients at 20 Hz
+// Broadcast all player states at 20 Hz
 setInterval(() => {
   if (players.size < 2) return
   const data = JSON.stringify({ type: 'states', players: [...players.values()] })
-  for (const ws of sockets.values()) {
-    (ws as any).send(data)
-  }
+  for (const ws of sockets.values()) ws.send(data)
 }, 50)
 
-console.log(`\n🚗  Tbilisi Drive server running on ws://localhost:${server.port}`)
-console.log(`    Share your IP:3001 with friends to play together\n`)
+const mode = IS_PROD ? `production (serving dist/ + ws on :${PORT})` : `dev (ws only on :${PORT})`
+console.log(`\n🚗  Tbilisi Drive — ${mode}\n`)
