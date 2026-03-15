@@ -8,7 +8,7 @@ import { InputManager } from './InputManager'
 import { SoundSystem } from './SoundSystem'
 import { CameraSystem } from './CameraSystem'
 import { ParticleSystem } from './ParticleSystem'
-import { TbilisiMap } from './world/TbilisiMap'
+import { OSMMap } from './world/OSMMap'
 import { BMW } from './entities/BMW'
 import { Mercedes } from './entities/Mercedes'
 import { Player } from './entities/Player'
@@ -45,7 +45,7 @@ export class GameEngine {
   private soundSystem!: SoundSystem
   private cameraSystem!: CameraSystem
   private particleSystem!: ParticleSystem
-  private map!: TbilisiMap
+  private map!: OSMMap
   private car!: Car
   private parkedCar!: Car   // second car always spawned at start
   private bmwCar!: Car      // stable reference — never swaps
@@ -155,12 +155,12 @@ export class GameEngine {
     this.particleSystem = new ParticleSystem(this.scene)
 
     // ─── World ────────────────────────────────────────────────────────────────
-    this.map = new TbilisiMap(this.scene, this.physicsWorld)
-    this.map.build()
+    this.map = new OSMMap(this.scene, this.physicsWorld)
+    await this.map.build()
 
-    // ─── Cars — both spawned side by side so player can choose ──────────────
-    const mercedesPos = new THREE.Vector3(-4, 2.0, 35)
-    const bmwPos      = new THREE.Vector3( 4, 2.0, 35)
+    // ─── Cars — spawned on Rustaveli Ave near Freedom Square ─────────────────
+    const mercedesPos = new THREE.Vector3(-10, 2.0, -10)
+    const bmwPos      = new THREE.Vector3(  5, 2.0, -10)
 
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
     const bmw      = new BMW(this.scene, this.physicsWorld)
@@ -193,7 +193,7 @@ export class GameEngine {
     // Both cars parked at start — player spawns on foot between them to choose
     this.car.chassisBody.sleep()
     this.parkedCar.chassisBody.sleep()
-    const playerStart = new THREE.Vector3(0, 1.0, 35)
+    const playerStart = new THREE.Vector3(0, 1.0, -10)
     this.player = new Player(this.scene, this.physicsWorld, playerStart, 0)
     this.gameMode = 'onfoot'
 
@@ -535,7 +535,7 @@ export class GameEngine {
     }
     this.gameMode = 'driving'
 
-    const startPos = new THREE.Vector3(0, 2.0, 35)
+    const startPos = new THREE.Vector3(0, 2.0, -10)
     this.car.reset(startPos)
     this.smoothCarYInit = false
     this.car.chassisBody.wakeUp()
