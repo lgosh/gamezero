@@ -8,6 +8,10 @@ export interface InputState {
   cameraToggle: boolean   // true only on the frame C is pressed
   pauseToggle: boolean    // true only on the frame ESC is pressed
   exitEnterToggle: boolean // true only on the frame F is pressed
+  sprint: boolean
+  jump: boolean
+  mouseDx: number
+  mouseDy: number
 }
 
 export class InputManager {
@@ -16,15 +20,19 @@ export class InputManager {
   private steeringSmooth = 0
   private readonly STEER_SPEED = 2.5
   private readonly STEER_RETURN = 3.5
+  private mouseDx = 0
+  private mouseDy = 0
+
+  private onKeyDown   = (e: KeyboardEvent) => { this.keys.add(e.code); e.preventDefault() }
+  private onKeyUp     = (e: KeyboardEvent) => { this.keys.delete(e.code) }
+  private onMouseMove = (e: MouseEvent)    => { this.mouseDx += e.movementX; this.mouseDy += e.movementY }
+  private onBlur      = () => { this.keys.clear() }  // clear only on true page-focus loss
 
   constructor() {
-    window.addEventListener('keydown', (e) => {
-      this.keys.add(e.code)
-      e.preventDefault()
-    })
-    window.addEventListener('keyup', (e) => {
-      this.keys.delete(e.code)
-    })
+    document.addEventListener('keydown', this.onKeyDown)
+    document.addEventListener('keyup',   this.onKeyUp)
+    document.addEventListener('mousemove', this.onMouseMove)
+    window.addEventListener('blur', this.onBlur)
   }
 
   private key(...codes: string[]): boolean {
@@ -60,9 +68,17 @@ export class InputManager {
     const cameraToggle = this.justPressed('KeyC')
     const pauseToggle = this.justPressed('Escape')
     const exitEnterToggle = this.justPressed('KeyF')
+    const sprint = this.key('Space')
+    const jump   = this.key('ShiftLeft', 'ShiftRight')
 
     // Snapshot keys for next frame's justPressed check
     this.prevKeys = new Set(this.keys)
+
+    // Consume accumulated mouse delta
+    const mouseDx = this.mouseDx
+    const mouseDy = this.mouseDy
+    this.mouseDx = 0
+    this.mouseDy = 0
 
     return {
       throttle,
@@ -74,11 +90,17 @@ export class InputManager {
       cameraToggle,
       pauseToggle,
       exitEnterToggle,
+      sprint,
+      jump,
+      mouseDx,
+      mouseDy,
     }
   }
 
   destroy() {
-    window.removeEventListener('keydown', () => {})
-    window.removeEventListener('keyup', () => {})
+    document.removeEventListener('keydown', this.onKeyDown)
+    document.removeEventListener('keyup',   this.onKeyUp)
+    document.removeEventListener('mousemove', this.onMouseMove)
+    window.removeEventListener('blur', this.onBlur)
   }
 }

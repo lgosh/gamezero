@@ -9,9 +9,11 @@ const JEANS  = 0x1c2c50
 const SHOE   = 0x1a1a1a
 const CAP    = 0xd8d8d8
 
-const WALK_SPEED = 4.5   // m/s forward
-const BACK_SPEED = 2.8   // m/s backward
-const TURN_SPEED = 2.8   // rad/s
+const WALK_SPEED   = 4.5   // m/s forward
+const SPRINT_SPEED = 9.0   // m/s sprint
+const BACK_SPEED   = 2.8   // m/s backward
+const TURN_SPEED   = 2.0   // rad/s (A/D secondary)
+const MOUSE_SENS   = 0.003 // rad/pixel
 
 function box(w: number, h: number, d: number, color: number) {
   return new THREE.Mesh(
@@ -33,7 +35,9 @@ export class Player {
   body: CANNON.Body
 
   private heading: number
+  private cameraPitch = 0
   private walkTime = 0
+  private jumpCooldown = 0
 
   private leftLegGroup!: THREE.Group
   private rightLegGroup!: THREE.Group
@@ -58,6 +62,7 @@ export class Player {
     this.body.position.set(startPos.x, startPos.y + 0.35, startPos.z)
     this.body.linearDamping = 0.92
     this.body.angularDamping = 1.0
+    this.body.allowSleep = false
     physics.world.addBody(this.body)
   }
 
@@ -169,25 +174,35 @@ export class Player {
   }
 
   update(input: InputState, dt: number) {
-    // Rotate heading with A/D
+    // Mouse X rotates heading; A/D as secondary
+    this.heading -= input.mouseDx * MOUSE_SENS
     this.heading -= input.steering * TURN_SPEED * dt
 
-    // Forward/back velocity
+    // Mouse Y adjusts camera pitch (clamped)
+    this.cameraPitch -= input.mouseDy * MOUSE_SENS
+    this.cameraPitch = Math.max(-0.7, Math.min(0.7, this.cameraPitch))
+
+    // Forward/back velocity + sprint
     const moveForward = input.throttle > 0.05
     const moveBack    = input.brake > 0.05
-    const speed = moveForward ? WALK_SPEED : moveBack ? -BACK_SPEED : 0
+    const speed = moveForward
+      ? (input.sprint ? SPRINT_SPEED : WALK_SPEED)
+      : moveBack ? -BACK_SPEED : 0
 
     this.body.velocity.x = Math.sin(this.heading) * speed
     this.body.velocity.z = Math.cos(this.heading) * speed
-    // Don't override gravity component
-    // Zero angular to prevent rolling sphere
     this.body.angularVelocity.set(0, 0, 0)
 
-    // Walk animation
-    const isMoving = Math.abs(speed) > 0.1 || Math.abs(input.steering) > 0.1
-    if (isMoving) {
-      this.walkTime += dt * Math.abs(speed) * 1.6
+    // Jump — only when on/near ground (low vertical velocity)
+    if (this.jumpCooldown > 0) this.jumpCooldown -= dt
+    if (input.jump && this.jumpCooldown <= 0 && Math.abs(this.body.velocity.y) < 1.0) {
+      this.body.velocity.y = 7.0
+      this.jumpCooldown = 0.5
     }
+
+    // Walk animation — faster when sprinting
+    const isMoving = Math.abs(speed) > 0.1 || Math.abs(input.steering) > 0.1
+    if (isMoving) this.walkTime += dt * Math.abs(speed) * 1.4
     const swing = isMoving ? Math.sin(this.walkTime) * 0.55 : 0
 
     this.leftLegGroup.rotation.x  =  swing
@@ -195,14 +210,12 @@ export class Player {
     this.leftArmGroup.rotation.x  = -swing * 0.5
     this.rightArmGroup.rotation.x =  swing * 0.5
 
-    // Sync visual — feet at body_y - radius (0.35)
-    this.group.position.set(
-      this.body.position.x,
-      this.body.position.y - 0.35,
-      this.body.position.z
-    )
+    // Sync visual
+    this.group.position.set(this.body.position.x, this.body.position.y - 0.35, this.body.position.z)
     this.group.rotation.y = this.heading
   }
+
+  getCameraPitch(): number { return this.cameraPitch }
 
   getPosition(): THREE.Vector3 {
     return new THREE.Vector3(

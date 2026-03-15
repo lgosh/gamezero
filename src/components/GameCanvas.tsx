@@ -65,8 +65,28 @@ export default function GameCanvas({ carType, onBack }: GameCanvasProps) {
     })
   }, [])
 
+  // Pointer lock — grab on any click while playing, release when paused/crashed
+  useEffect(() => {
+    const requestLock = () => {
+      if (hudState.state === 'playing' && !document.pointerLockElement) {
+        canvasRef.current?.requestPointerLock()
+      }
+    }
+    document.addEventListener('click', requestLock)
+    return () => document.removeEventListener('click', requestLock)
+  }, [hudState.state])
+
+  useEffect(() => {
+    if (hudState.state === 'paused' || hudState.state === 'crashed') {
+      if (document.pointerLockElement) document.exitPointerLock()
+    } else if (hudState.state === 'playing') {
+      // Re-acquire after resuming
+      if (!document.pointerLockElement) canvasRef.current?.requestPointerLock()
+    }
+  }, [hudState.state])
+
   return (
-    <div className="absolute inset-0 bg-black">
+    <div className={`absolute inset-0 bg-black ${hudState.state === 'paused' || hudState.state === 'crashed' ? 'cursor-auto' : 'cursor-none'}`}>
       {/* Three.js Canvas */}
       <canvas
         ref={canvasRef}

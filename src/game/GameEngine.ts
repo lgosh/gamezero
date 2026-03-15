@@ -62,6 +62,10 @@ export class GameEngine {
   // Smoke timer
   private smokeTimer = 0
 
+  // Smoothed car Y — absorbs suspension bounce before it reaches the camera
+  private smoothCarY = 0
+  private smoothCarYInit = false
+
   async init(canvas: HTMLCanvasElement, carType: CarType, onHUDUpdate: (s: HUDState) => void): Promise<void> {
     this.carType = carType
     this.onHUDUpdate = onHUDUpdate
@@ -186,7 +190,7 @@ export class GameEngine {
       this.player.update(input, dt)
       const playerPos = this.player.getPosition()
       const playerFwd = this.player.getForwardVector()
-      this.cameraSystem.updateOnFoot(playerPos, playerFwd, dt)
+      this.cameraSystem.updateOnFoot(playerPos, playerFwd, dt, this.player.getCameraPitch())
       this.particleSystem.update(dt)
       this.lastHUDState = {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
@@ -250,12 +254,18 @@ export class GameEngine {
     this.particleSystem.update(dt)
 
     // Camera
-    const carPos = this.car.getPosition()
+    const rawCarPos = this.car.getPosition()
+
+    // Low-pass filter the Y axis only — kills suspension bounce, preserves hill-following
+    if (!this.smoothCarYInit) { this.smoothCarY = rawCarPos.y; this.smoothCarYInit = true }
+    this.smoothCarY += (rawCarPos.y - this.smoothCarY) * Math.min(1, dt * 4)
+    const carPos = new THREE.Vector3(rawCarPos.x, this.smoothCarY, rawCarPos.z)
+
     const carFwd = this.car.getForwardVector()
     const carUp = this.car.getUpVector()
     const v = this.car.chassisBody.velocity
     const carVel = new THREE.Vector3(v.x, v.y, v.z)
-    this.cameraSystem.update(carPos, carFwd, carUp, carVel, speedKmh, dt, input.lookBack)
+    this.cameraSystem.update(carPos, carFwd, carUp, carVel, speedKmh, dt, input.lookBack, input.mouseDx, input.mouseDy)
 
     if (input.cameraToggle) {
       this.cameraModeIndex = (this.cameraModeIndex + 1) % this.CAMERA_MODES.length
@@ -323,6 +333,7 @@ export class GameEngine {
 
     const startPos = new THREE.Vector3(0, 1, 55)
     this.car.reset(startPos)
+    this.smoothCarYInit = false
     this.car.chassisBody.wakeUp()
     this.car.setHeadlights(true)
     this.cameraSystem.reset()
