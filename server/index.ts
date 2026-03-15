@@ -14,6 +14,7 @@ interface PlayerState {
   vel: [number, number, number]
   mode: 'driving' | 'onfoot'
   speedKmh: number
+  carId: string | null
 }
 
 const players = new Map<string, PlayerState>()
@@ -71,7 +72,7 @@ const server = Bun.serve<WSData>({
         const state: PlayerState = {
           id, nickname,
           pos: [0, 2, 35], quat: [0, 0, 0, 1], vel: [0, 0, 0],
-          mode: 'onfoot', speedKmh: 0,
+          mode: 'onfoot', speedKmh: 0, carId: null,
         }
         players.set(id, state)
         sockets.set(id, ws)
@@ -94,6 +95,14 @@ const server = Bun.serve<WSData>({
         player.vel      = msg.vel      as PlayerState['vel']
         player.mode     = msg.mode     as PlayerState['mode']
         player.speedKmh = msg.speedKmh as number
+        player.carId    = (msg.carId   as string | null) ?? null
+        return
+      }
+
+      if (msg.type === 'carjack') {
+        // Forward directly to the target player
+        const targetWs = sockets.get(msg.targetId as string)
+        if (targetWs) targetWs.send(JSON.stringify({ type: 'carjack', carId: msg.carId }))
         return
       }
 

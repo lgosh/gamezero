@@ -6,6 +6,7 @@ export interface LocalState {
   vel: [number, number, number]
   mode: 'driving' | 'onfoot'
   speedKmh: number
+  carId: string | null   // 'bmw' | 'mercedes' | null
 }
 
 export interface RemotePlayerData {
@@ -16,6 +17,7 @@ export interface RemotePlayerData {
   vel: [number, number, number]
   mode: 'driving' | 'onfoot'
   speedKmh: number
+  carId: string | null
 }
 
 export interface ChatMessage {
@@ -33,11 +35,10 @@ export class NetworkManager {
   onStates?: (players: RemotePlayerData[]) => void
   onChat?: (msg: ChatMessage) => void
   onConnected?: (id: string, existing: RemotePlayerData[]) => void
+  onCarjack?: (carId: string) => void
 
   connect(nickname: string) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    // Dev  → local Bun server on :3001
-    // Prod → same host, /ws path (Fly.io single-process server)
     const url = (import.meta.env.VITE_WS_URL as string | undefined)
       ?? (import.meta.env.DEV
         ? `ws://${location.hostname}:3001`
@@ -47,7 +48,6 @@ export class NetworkManager {
     this.ws = new WebSocket(url)
 
     this.ws.onopen = () => {
-      console.log('[Network] Connected, joining as', nickname)
       this.ws!.send(JSON.stringify({ type: 'join', nickname }))
     }
 
@@ -57,10 +57,7 @@ export class NetworkManager {
 
       if (msg.type === 'welcome') {
         this.localId = msg.id as string
-        this.onConnected?.(
-          msg.id as string,
-          msg.players as RemotePlayerData[],
-        )
+        this.onConnected?.(msg.id as string, msg.players as RemotePlayerData[])
       } else if (msg.type === 'player_joined') {
         this.onPlayerJoined?.(msg as unknown as RemotePlayerData)
       } else if (msg.type === 'player_left') {
@@ -70,6 +67,8 @@ export class NetworkManager {
         this.onStates?.(all.filter(p => p.id !== this.localId))
       } else if (msg.type === 'chat') {
         this.onChat?.(msg as unknown as ChatMessage)
+      } else if (msg.type === 'carjack') {
+        this.onCarjack?.(msg.carId as string)
       }
     }
 
@@ -86,6 +85,12 @@ export class NetworkManager {
   sendChat(text: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'chat', text }))
+    }
+  }
+
+  sendCarjack(targetId: string, carId: string) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'carjack', targetId, carId }))
     }
   }
 

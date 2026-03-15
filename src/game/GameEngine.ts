@@ -48,6 +48,8 @@ export class GameEngine {
   private map!: TbilisiMap
   private car!: Car
   private parkedCar!: Car   // second car always spawned at start
+  private bmwCar!: Car      // stable reference — never swaps
+  private mercedesCar!: Car // stable reference — never swaps
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
 
@@ -73,6 +75,7 @@ export class GameEngine {
   // Multiplayer
   private network: NetworkManager | null = null
   private remotePlayers = new Map<string, RemotePlayer>()
+  private remoteStates  = new Map<string, RemotePlayerData>()
   private networkSendTimer = 0
   onChatMessage?: (msg: ChatMessage) => void
 
@@ -168,12 +171,12 @@ export class GameEngine {
       return
     }
 
-    // Active car starts as whichever the player picked from the menu; the other is parked
-    if (carType === 'bmw') {
-      this.car = bmw; this.parkedCar = mercedes
-    } else {
-      this.car = mercedes; this.parkedCar = bmw
-    }
+    // Stable references — never swap
+    this.bmwCar      = bmw
+    this.mercedesCar = mercedes
+
+    // Active car starts as BMW; the other is parked
+    this.car = bmw; this.parkedCar = mercedes
 
     // Wire crash sound + camera shake to physics impacts
     const wireImpact = (car: Car) => {
@@ -205,14 +208,21 @@ export class GameEngine {
       }
       this.network.onPlayerJoined = (data) => this.addRemotePlayer(data)
       this.network.onPlayerLeft   = (id)  => this.removeRemotePlayer(id)
-      this.network.onStates       = (players) => {
+      this.network.onStates = (players) => {
         for (const p of players) {
+          this.remoteStates.set(p.id, p)
           const rp = this.remotePlayers.get(p.id)
           if (rp) rp.applyRemoteState(p)
           else    this.addRemotePlayer(p)
         }
       }
       this.network.onChat = (msg) => this.onChatMessage?.(msg)
+      // Someone is carjacking our car — force-exit immediately
+      this.network.onCarjack = (carId) => {
+        if (this.gameMode === 'driving' && this.getLocalCarId() === carId) {
+          this.exitCar()
+        }
+      }
       this.network.connect(nickname.trim())
     }
 
@@ -221,12 +231,40 @@ export class GameEngine {
 
   private addRemotePlayer(data: RemotePlayerData) {
     if (this.remotePlayers.has(data.id)) return
+    this.remoteStates.set(data.id, data)
     this.remotePlayers.set(data.id, new RemotePlayer(this.scene, data))
   }
 
   private removeRemotePlayer(id: string) {
     const rp = this.remotePlayers.get(id)
     if (rp) { rp.dispose(); this.remotePlayers.delete(id) }
+    this.remoteStates.delete(id)
+  }
+
+  /** Move the actual game Car entity to wherever the remote player is driving it. */
+  private updateRemoteCars() {
+    for (const state of this.remoteStates.values()) {
+      if (state.mode !== 'driving' || !state.carId) continue
+      const car = state.carId === 'bmw' ? this.bmwCar : this.mercedesCar
+      // Never override a car the local player is currently driving
+      if (car === this.car && this.gameMode === 'driving') continue
+      car.chassisBody.position.set(state.pos[0], state.pos[1], state.pos[2])
+      car.chassisBody.quaternion.set(state.quat[0], state.quat[1], state.quat[2], state.quat[3])
+      car.chassisBody.velocity.set(state.vel[0], state.vel[1], state.vel[2])
+      car.syncVisual()
+    }
+  }
+
+  private getLocalCarId(): string | null {
+    if (this.gameMode !== 'driving') return null
+    return this.car === this.bmwCar ? 'bmw' : 'mercedes'
+  }
+
+  private getRemoteDriverOf(carId: string): string | null {
+    for (const [id, state] of this.remoteStates) {
+      if (state.mode === 'driving' && state.carId === carId) return id
+    }
+    return null
   }
 
   start() {
@@ -267,6 +305,8 @@ export class GameEngine {
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
     // Physics step
     this.physicsWorld.step(dt)
+    // Override remote-driven cars' positions BEFORE any syncVisual calls
+    this.updateRemoteCars()
     this.map.syncProps()
 
     let currentPlayerPos = { x: 0, z: 0 }
@@ -419,8 +459,6 @@ export class GameEngine {
       const p = this.player.getPosition()
       const fwd = this.player.getForwardVector()
       const yaw = Math.atan2(fwd.x, fwd.z)
-      const q = new (this.player.body.quaternion.constructor as any)()
-      // Build a yaw-only quaternion from the heading
       pos  = [p.x, p.y, p.z]
       quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)]
       vel  = [0, 0, 0]
@@ -433,7 +471,7 @@ export class GameEngine {
       speedKmh = this.car.speedKmh
     }
 
-    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh })
+    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh, carId: this.getLocalCarId() })
   }
 
   private exitCar() {
@@ -464,6 +502,16 @@ export class GameEngine {
     const closest    = distActive <= distParked ? this.car : this.parkedCar
     const closestDist = Math.min(distActive, distParked)
     if (closestDist > 5) return
+
+    // If a remote player is driving this car, carjack them (they get force-ejected)
+    const closestCarId = closest === this.bmwCar ? 'bmw' : 'mercedes'
+    const remoteDriverId = this.getRemoteDriverOf(closestCarId)
+    if (remoteDriverId) {
+      this.network?.sendCarjack(remoteDriverId, closestCarId)
+      // Optimistically clear their occupancy so updateRemoteCars stops overriding the car
+      const rs = this.remoteStates.get(remoteDriverId)
+      if (rs) this.remoteStates.set(remoteDriverId, { ...rs, mode: 'onfoot', carId: null })
+    }
 
     // Swap active/parked if entering the parked car
     if (closest === this.parkedCar) {
@@ -553,6 +601,7 @@ export class GameEngine {
     this.network?.destroy()
     for (const rp of this.remotePlayers.values()) rp.dispose()
     this.remotePlayers.clear()
+    this.remoteStates.clear()
     this.renderer?.dispose()
   }
 }
