@@ -13,6 +13,9 @@ import { BMW } from './entities/BMW'
 import { Mercedes } from './entities/Mercedes'
 import { Player } from './entities/Player'
 import type { Car } from './entities/Car'
+import { NetworkManager } from './NetworkManager'
+import type { RemotePlayerData, ChatMessage } from './NetworkManager'
+import { RemotePlayer } from './RemotePlayer'
 
 export type CarType = 'bmw' | 'mercedes'
 export type GameState = 'loading' | 'playing' | 'paused' | 'crashed'
@@ -67,6 +70,12 @@ export class GameEngine {
   private hornActive = false
   private lastGear = 1
 
+  // Multiplayer
+  private network: NetworkManager | null = null
+  private remotePlayers = new Map<string, RemotePlayer>()
+  private networkSendTimer = 0
+  onChatMessage?: (msg: ChatMessage) => void
+
   // Smoke timer
   private smokeTimer = 0
 
@@ -74,7 +83,7 @@ export class GameEngine {
   private smoothCarY = 0
   private smoothCarYInit = false
 
-  async init(canvas: HTMLCanvasElement, carType: CarType, onHUDUpdate: (s: HUDState) => void): Promise<void> {
+  async init(canvas: HTMLCanvasElement, carType: CarType, nickname: string, onHUDUpdate: (s: HUDState) => void): Promise<void> {
     this.carType = carType
     this.onHUDUpdate = onHUDUpdate
 
@@ -188,7 +197,36 @@ export class GameEngine {
     // ─── Resize ───────────────────────────────────────────────────────────────
     window.addEventListener('resize', this.onResize)
 
+    // ─── Multiplayer ──────────────────────────────────────────────────────────
+    if (nickname.trim()) {
+      this.network = new NetworkManager()
+      this.network.onConnected = (_id, existing) => {
+        for (const p of existing) this.addRemotePlayer(p)
+      }
+      this.network.onPlayerJoined = (data) => this.addRemotePlayer(data)
+      this.network.onPlayerLeft   = (id)  => this.removeRemotePlayer(id)
+      this.network.onStates       = (players) => {
+        for (const p of players) {
+          const rp = this.remotePlayers.get(p.id)
+          if (rp) rp.applyRemoteState(p)
+          else    this.addRemotePlayer(p)
+        }
+      }
+      this.network.onChat = (msg) => this.onChatMessage?.(msg)
+      this.network.connect(nickname.trim())
+    }
+
     this.state = 'playing'
+  }
+
+  private addRemotePlayer(data: RemotePlayerData) {
+    if (this.remotePlayers.has(data.id)) return
+    this.remotePlayers.set(data.id, new RemotePlayer(this.scene, data))
+  }
+
+  private removeRemotePlayer(id: string) {
+    const rp = this.remotePlayers.get(id)
+    if (rp) { rp.dispose(); this.remotePlayers.delete(id) }
   }
 
   start() {
@@ -255,6 +293,14 @@ export class GameEngine {
         playerPos: currentPlayerPos, playerHeading: currentHeading,
       }
       this.onHUDUpdate?.(this.lastHUDState)
+
+      // Network
+      this.networkSendTimer += dt
+      if (this.networkSendTimer >= 0.05) {
+        this.networkSendTimer = 0
+        this.sendNetworkState()
+      }
+      for (const rp of this.remotePlayers.values()) rp.update(dt)
       return
     }
 
@@ -352,6 +398,42 @@ export class GameEngine {
       playerHeading: currentHeading,
     }
     this.onHUDUpdate?.(this.lastHUDState)
+
+    // ── Network ────────────────────────────────────────────────────────────
+    this.networkSendTimer += dt
+    if (this.networkSendTimer >= 0.05) { // 20 Hz
+      this.networkSendTimer = 0
+      this.sendNetworkState()
+    }
+    for (const rp of this.remotePlayers.values()) rp.update(dt)
+  }
+
+  private sendNetworkState() {
+    if (!this.network?.connected) return
+    let pos: [number, number, number]
+    let quat: [number, number, number, number]
+    let vel: [number, number, number]
+    let speedKmh = 0
+
+    if (this.gameMode === 'onfoot' && this.player) {
+      const p = this.player.getPosition()
+      const fwd = this.player.getForwardVector()
+      const yaw = Math.atan2(fwd.x, fwd.z)
+      const q = new (this.player.body.quaternion.constructor as any)()
+      // Build a yaw-only quaternion from the heading
+      pos  = [p.x, p.y, p.z]
+      quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)]
+      vel  = [0, 0, 0]
+    } else {
+      const p = this.car.getPosition()
+      const b = this.car.chassisBody
+      pos  = [p.x, p.y, p.z]
+      quat = [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w]
+      vel  = [b.velocity.x, b.velocity.y, b.velocity.z]
+      speedKmh = this.car.speedKmh
+    }
+
+    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh })
   }
 
   private exitCar() {
@@ -440,6 +522,10 @@ export class GameEngine {
     }
   }
 
+  sendChat(text: string) {
+    this.network?.sendChat(text)
+  }
+
   toggleTimeOfDay() {
     if (!this.map || !this.map.lighting) return
     const current = this.map.lighting.getMode()
@@ -464,6 +550,9 @@ export class GameEngine {
     this.soundSystem?.destroy()
     this.car?.dispose()
     this.parkedCar?.dispose()
+    this.network?.destroy()
+    for (const rp of this.remotePlayers.values()) rp.dispose()
+    this.remotePlayers.clear()
     this.renderer?.dispose()
   }
 }

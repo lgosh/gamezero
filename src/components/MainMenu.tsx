@@ -1,10 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 
 interface MainMenuProps {
-  onStart: () => void
+  onStart: (nickname: string) => void
 }
 
 export default function MainMenu({ onStart }: MainMenuProps) {
+  const [nickname, setNickname] = useState('')
+
+  const handleStart = () => {
+    onStart(nickname.trim())
+  }
+
   return (
     <div
       className="absolute inset-0 overflow-hidden flex flex-col items-center justify-center"
@@ -41,7 +47,7 @@ export default function MainMenu({ onStart }: MainMenuProps) {
       </div>
 
       {/* Content */}
-      <div className="relative z-10 flex flex-col items-center gap-8 text-center px-8 select-none">
+      <div className="relative z-10 flex flex-col items-center gap-6 text-center px-8 select-none">
         {/* Eyebrow */}
         <div className="text-white/30 text-xs tracking-[0.5em] uppercase font-mono">
           Welcome to
@@ -68,15 +74,28 @@ export default function MainMenu({ onStart }: MainMenuProps) {
           Freedom Square &nbsp;·&nbsp; საქართველო
         </div>
 
-        {/* Car names hint */}
-        <div className="text-white/20 text-xs font-mono tracking-wider">
-          BMW M5 Competition &nbsp;·&nbsp; Mercedes-AMG E63 S
+        {/* Nickname input */}
+        <div className="flex flex-col items-center gap-2 w-64">
+          <label className="text-white/40 text-xs font-mono tracking-widest uppercase">
+            Your Nickname
+          </label>
+          <input
+            type="text"
+            value={nickname}
+            onChange={e => setNickname(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleStart() }}
+            placeholder="Enter name…"
+            maxLength={20}
+            autoFocus
+            className="w-full px-4 py-3 text-center text-white font-mono text-sm rounded-lg outline-none border border-white/15 focus:border-blue-500/60 transition-colors"
+            style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(8px)' }}
+          />
         </div>
 
         {/* Start button */}
         <button
-          onClick={onStart}
-          className="mt-4 px-20 py-5 rounded-xl font-black text-xl text-white tracking-[0.2em] uppercase transition-all duration-200 hover:scale-105 active:scale-95"
+          onClick={handleStart}
+          className="mt-2 px-20 py-5 rounded-xl font-black text-xl text-white tracking-[0.2em] uppercase transition-all duration-200 hover:scale-105 active:scale-95"
           style={{
             fontFamily: 'Rajdhani, sans-serif',
             background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
@@ -87,7 +106,7 @@ export default function MainMenu({ onStart }: MainMenuProps) {
         </button>
 
         <div className="text-white/15 text-[11px] font-mono tracking-wider">
-          WASD to drive &nbsp;·&nbsp; F to enter / exit car &nbsp;·&nbsp; P to pause
+          WASD to drive &nbsp;·&nbsp; F to enter / exit car &nbsp;·&nbsp; T to chat &nbsp;·&nbsp; P to pause
         </div>
       </div>
 

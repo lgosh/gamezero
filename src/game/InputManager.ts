@@ -23,8 +23,13 @@ export class InputManager {
   private mouseDx = 0
   private mouseDy = 0
 
-  private onKeyDown   = (e: KeyboardEvent) => { this.keys.add(e.code); e.preventDefault() }
-  private onKeyUp     = (e: KeyboardEvent) => { this.keys.delete(e.code) }
+  private onKeyDown = (e: KeyboardEvent) => {
+    // Let the chat input (or any other text field) handle its own keys
+    if (document.activeElement?.tagName === 'INPUT') return
+    this.keys.add(e.code)
+    e.preventDefault()
+  }
+  private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(e.code) }
   private onMouseMove = (e: MouseEvent)    => { this.mouseDx += e.movementX; this.mouseDy += e.movementY }
   private onBlur      = () => { this.keys.clear() }  // clear only on true page-focus loss
 
@@ -45,6 +50,19 @@ export class InputManager {
   }
 
   getState(dt: number): InputState {
+    // If a text input is focused (chat box), return a zeroed state so the
+    // game doesn't react to keystrokes the player is typing into chat.
+    if (document.activeElement?.tagName === 'INPUT') {
+      this.prevKeys = new Set(this.keys)
+      this.mouseDx = 0
+      this.mouseDy = 0
+      return {
+        throttle: 0, brake: 0, steering: 0, handbrake: false, honk: false,
+        lookBack: false, cameraToggle: false, pauseToggle: false,
+        exitEnterToggle: false, sprint: false, jump: false, mouseDx: 0, mouseDy: 0,
+      }
+    }
+
     const left = this.key('ArrowLeft', 'KeyA')
     const right = this.key('ArrowRight', 'KeyD')
 

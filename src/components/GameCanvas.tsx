@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { GameEngine, type HUDState } from '../game/GameEngine'
 import HUD from './HUD'
+import ChatOverlay, { type ChatMsg } from './ChatOverlay'
 
 interface GameCanvasProps {
+  nickname: string
   onBack: () => void
 }
 
@@ -15,12 +17,13 @@ const DEFAULT_HUD: HUDState = {
   carType: 'bmw',
 }
 
-export default function GameCanvas({ onBack }: GameCanvasProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const engineRef = useRef<GameEngine | null>(null)
-  const [hudState, setHudState] = useState<HUDState>({ ...DEFAULT_HUD })
-  const [loading, setLoading] = useState(true)
-  const [muted, setMuted] = useState(false)
+export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
+  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  const engineRef  = useRef<GameEngine | null>(null)
+  const [hudState, setHudState]       = useState<HUDState>({ ...DEFAULT_HUD })
+  const [loading, setLoading]         = useState(true)
+  const [muted, setMuted]             = useState(false)
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -29,7 +32,12 @@ export default function GameCanvas({ onBack }: GameCanvasProps) {
     const engine = new GameEngine()
     engineRef.current = engine
 
-    engine.init(canvas, 'bmw', (state) => {
+    // Wire chat messages from network → React state
+    engine.onChatMessage = (msg) => {
+      setChatMessages(prev => [...prev, { ...msg, ts: Date.now() }])
+    }
+
+    engine.init(canvas, 'bmw', nickname, (state) => {
       setHudState(state)
     }).then(() => {
       setLoading(false)
@@ -42,27 +50,15 @@ export default function GameCanvas({ onBack }: GameCanvasProps) {
       engine.destroy()
       engineRef.current = null
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleReset = useCallback(() => {
-    engineRef.current?.resetCar()
-  }, [])
-
-  const handlePause = useCallback(() => {
-    engineRef.current?.togglePause()
-  }, [])
-
+  const handleReset      = useCallback(() => { engineRef.current?.resetCar() }, [])
+  const handlePause      = useCallback(() => { engineRef.current?.togglePause() }, [])
   const handleMuteToggle = useCallback(() => {
-    setMuted((prev) => {
-      const next = !prev
-      engineRef.current?.setMute(next)
-      return next
-    })
+    setMuted(prev => { const next = !prev; engineRef.current?.setMute(next); return next })
   }, [])
-
-  const handleTimeToggle = useCallback(() => {
-    engineRef.current?.toggleTimeOfDay()
-  }, [])
+  const handleTimeToggle = useCallback(() => { engineRef.current?.toggleTimeOfDay() }, [])
+  const handleSendChat   = useCallback((text: string) => { engineRef.current?.sendChat(text) }, [])
 
   // Pointer lock — grab on click OR keydown so user doesn't need to click first
   useEffect(() => {
@@ -86,6 +82,8 @@ export default function GameCanvas({ onBack }: GameCanvasProps) {
       if (!document.pointerLockElement) canvasRef.current?.requestPointerLock()
     }
   }, [hudState.state])
+
+  const chatDisabled = hudState.state === 'paused' || hudState.state === 'crashed'
 
   return (
     <div className={`absolute inset-0 bg-black ${hudState.state === 'paused' || hudState.state === 'crashed' ? 'cursor-auto' : 'cursor-none'}`}>
@@ -120,6 +118,15 @@ export default function GameCanvas({ onBack }: GameCanvasProps) {
           onTimeToggle={handleTimeToggle}
           onBack={onBack}
           muted={muted}
+        />
+      )}
+
+      {/* Chat */}
+      {!loading && (
+        <ChatOverlay
+          messages={chatMessages}
+          onSend={handleSendChat}
+          disabled={chatDisabled}
         />
       )}
     </div>
