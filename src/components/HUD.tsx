@@ -6,7 +6,105 @@ interface HUDProps {
   onReset: () => void
   onPause: () => void
   onMuteToggle: () => void
+  onTimeToggle: () => void
+  onBack: () => void
   muted: boolean
+}
+
+function Minimap({ playerPos, playerHeading }: { playerPos?: { x: number; z: number }; playerHeading?: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !playerPos) return
+    const ctx = canvas.getContext('2d')!
+    const W = canvas.width
+    const H = canvas.height
+    
+    ctx.clearRect(0, 0, W, H)
+    
+    // Circular background (GTA style)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+    ctx.beginPath()
+    ctx.arc(W/2, H/2, W/2 - 2, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 3
+    ctx.stroke()
+
+    ctx.save()
+    ctx.translate(W/2, H/2)
+    // GTA Style Rotation: Map rotates to compensate for player heading.
+    // Standard rotation: ctx.rotate(playerHeading) works with x = -relX, y = -relZ.
+    ctx.rotate(playerHeading || 0)
+
+    const scale = 0.6 
+    const worldToMap = (wx: number, wz: number) => ({
+      x: -(wx - playerPos.x) * scale,
+      y: -(wz - playerPos.z) * scale 
+    })
+
+    // Clipping path for the circular radar
+    ctx.beginPath()
+    ctx.arc(0, 0, W/2 - 4, 0, Math.PI * 2)
+    ctx.clip()
+
+    // Draw Roads (Simplified radial layout)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
+    ctx.lineCap = 'round'
+
+    const drawRoad = (angle: number, length: number, width: number, startX = 0, startZ = 0) => {
+      const p1 = worldToMap(startX, startZ)
+      const p2 = {
+        x: p1.x - Math.sin(angle) * length * scale,
+        y: p1.y - Math.cos(angle) * length * scale 
+      }
+      ctx.lineWidth = width * scale
+      ctx.beginPath()
+      ctx.moveTo(p1.x, p1.y)
+      ctx.lineTo(p2.x, p2.y)
+      ctx.stroke()
+    }
+
+    // Central Square Roundabout
+    ctx.lineWidth = 40 * scale
+    ctx.beginPath()
+    const rPos = worldToMap(0, 0)
+    ctx.arc(rPos.x, rPos.y, 32 * scale, 0, Math.PI * 2)
+    ctx.stroke()
+
+    // 6 Radiating Streets (Angles match fixed TbilisiMap.ts)
+    drawRoad(-Math.PI * 0.75, 600, 36) // Rustaveli (NW)
+    drawRoad(Math.PI * 0.75, 600, 28)  // Pushkin (NE)
+    drawRoad(Math.PI * 0.25, 600, 24)  // Kote Apkhazi (SE)
+    drawRoad(0, 400, 22)               // Dadiani (S)
+    drawRoad(-Math.PI * 0.25, 400, 24) // Leonidze (SW)
+    drawRoad(-Math.PI * 0.1, 300, 20)  // Tabidze (SSW)
+
+    ctx.restore()
+
+    // Fixed Player marker in center of radar
+    ctx.save()
+    ctx.translate(W/2, H/2)
+    
+    // Triangle pointing UP (GTA style)
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = '#000000'
+    ctx.lineWidth = 1
+    ctx.shadowBlur = 4
+    ctx.shadowColor = '#000000'
+    ctx.beginPath()
+    ctx.moveTo(0, -12) // Pointy end
+    ctx.lineTo(8, 10)
+    ctx.lineTo(-8, 10)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+
+  }, [playerPos, playerHeading])
+
+  return <canvas ref={canvasRef} width={160} height={160} className="shadow-2xl" style={{ borderRadius: '50%' }} />
 }
 
 function Speedometer({ speedKmh, maxSpeed = 260 }: { speedKmh: number; maxSpeed?: number }) {
@@ -138,65 +236,45 @@ function DamageIndicator({ damage }: { damage: number }) {
   )
 }
 
-/** GTA-style stat strip: health, money, weapon */
+/** GTA San Andreas style stats */
 function GTAStats() {
   return (
-    <div className="flex flex-col gap-2" style={{ width: 160 }}>
+    <div className="flex flex-col items-end gap-1 font-sans font-black italic text-right uppercase" style={{ textShadow: '2px 2px 0px #000' }}>
+      {/* Time */}
+      <div className="text-2xl text-[#ffffff] tracking-tighter">14:30</div>
+      
       {/* Money */}
-      <div className="hud-panel px-3 py-1.5 flex items-center justify-between">
-        <span className="text-[11px] text-white/40 font-mono">$</span>
-        <span className="text-sm font-mono font-bold text-green-400 tracking-wider">5,000</span>
+      <div className="text-3xl text-[#2d7d32] tracking-tighter">$00005000</div>
+
+      {/* Health/Armor bars */}
+      <div className="w-32 flex flex-col gap-1.5 mt-1">
+        {/* Armor (Blue) */}
+        <div className="h-2.5 bg-[#000000] border-2 border-[#000000] overflow-hidden">
+          <div className="h-full bg-[#cbd1d4]" style={{ width: '100%' }} />
+        </div>
+        {/* Health (Red) */}
+        <div className="h-2.5 bg-[#000000] border-2 border-[#000000] overflow-hidden">
+          <div className="h-full bg-[#b22222]" style={{ width: '100%' }} />
+        </div>
       </div>
 
-      {/* Health bar */}
-      <div className="hud-panel px-3 py-2">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] text-white/40 font-mono uppercase tracking-wider">❤ HP</span>
-          <span className="text-xs font-mono text-red-400 font-bold">100</span>
-        </div>
-        <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-          <div className="h-full rounded-full" style={{ width: '100%', background: 'linear-gradient(90deg, #ef4444, #f87171)' }} />
-        </div>
-      </div>
-
-      {/* Weapon */}
-      <div className="hud-panel px-3 py-2 flex items-center gap-2">
-        <span className="text-2xl leading-none">✊</span>
-        <div className="flex flex-col">
-          <span className="text-[10px] text-white/40 font-mono uppercase tracking-wider">Weapon</span>
-          <span className="text-xs font-mono text-white/80 font-bold">FIST</span>
-        </div>
+      {/* Weapon Icon */}
+      <div className="mt-2 w-16 h-16 bg-black/40 border-2 border-white/20 flex items-center justify-center text-4xl">
+        👊
       </div>
     </div>
   )
 }
 
-export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HUDProps) {
+export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggle, onBack, muted }: HUDProps) {
   const gearLabels: Record<number, string> = { 0: 'R', 1: 'N', 2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6' }
   const gearDisplay = gearLabels[state.gear] ?? String(state.gear)
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
 
-      {/* ── Top-center: Pause + Sound centered side by side ─────────────────── */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto">
-        <button
-          onClick={onPause}
-          className="hud-panel px-3 py-1 text-[11px] text-white/60 hover:text-white uppercase tracking-wider font-mono cursor-pointer hover:bg-white/10 transition-colors"
-        >
-          {state.state === 'paused' ? '▶ Resume' : '⏸ Pause'}
-        </button>
-        <button
-          onClick={onMuteToggle}
-          className="hud-panel px-3 py-1 text-[11px] text-white/60 hover:text-white uppercase tracking-wider font-mono cursor-pointer hover:bg-white/10 transition-colors"
-          title={muted ? 'Unmute' : 'Mute'}
-        >
-          {muted ? '🔇 Muted' : '🔊 Sound'}
-        </button>
-      </div>
-
       {/* ── Game title ────────────────────────────────────────────────────────── */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none select-none" style={{ marginTop: 36 }}>
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none select-none">
         <div
           className="text-white/50 font-bold tracking-[0.18em] text-xs uppercase text-center"
           style={{ fontFamily: 'Rajdhani, sans-serif', textShadow: '0 0 12px rgba(0,120,255,0.5)' }}
@@ -217,15 +295,8 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HU
         </div>
       </div>
 
-      {/* ── Top-right: DMG (moved slightly down) ─────────────────────────────── */}
-      <div className="absolute top-16 right-6 pointer-events-none">
-        <div className="hud-panel p-3" style={{ width: 160 }}>
-          <DamageIndicator damage={state.damage} />
-        </div>
-      </div>
-
-      {/* ── Right side: GTA stats (health, money, weapon) ────────────────────── */}
-      <div className="absolute right-6 pointer-events-none" style={{ top: '50%', transform: 'translateY(-50%)' }}>
+      {/* ── Top-right: GTA Stats ────────────────────────────────────────────── */}
+      <div className="absolute top-6 right-6 pointer-events-none">
         <GTAStats />
       </div>
 
@@ -253,8 +324,9 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HU
         </>
       )}
 
-      {/* ── Bottom-left: Controls hint ────────────────────────────────────────── */}
-      <div className="absolute bottom-6 left-6 pointer-events-none">
+      {/* ── Bottom-left: Minimap & Controls hint ─────────────────────────────── */}
+      <div className="absolute bottom-6 left-6 pointer-events-none flex flex-col gap-4">
+        <Minimap playerPos={state.playerPos} playerHeading={state.playerHeading} />
         {state.onFoot ? (
           <div className="hud-panel px-3 py-2 text-[11px] text-white/35 font-mono leading-5">
             <div>W / ↑ — Walk forward</div>
@@ -263,6 +335,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HU
             <div>Space — Sprint</div>
             <div>Shift — Jump</div>
             <div>F — Enter car</div>
+            <div className="border-t border-white/10 mt-1 pt-1 text-white/50">P / ESC — Pause</div>
           </div>
         ) : (
           <div className="hud-panel px-3 py-2 text-[11px] text-white/35 font-mono leading-5">
@@ -272,6 +345,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HU
             <div>Space — Handbrake</div>
             <div>H — Horn &nbsp; B — Look back</div>
             <div>C — Camera &nbsp; F — Exit car</div>
+            <div className="border-t border-white/10 mt-1 pt-1 text-white/50">P / ESC — Pause</div>
           </div>
         )}
       </div>
@@ -279,12 +353,23 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, muted }: HU
       {/* ── Pause overlay ─────────────────────────────────────────────────────── */}
       {state.state === 'paused' && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-auto" style={{ background: 'rgba(100,100,100,0.45)', backdropFilter: 'blur(4px)' }}>
-          <div className="hud-panel p-8 text-center">
+          <div className="hud-panel p-8 text-center" style={{ minWidth: 280 }}>
             <div className="text-white text-4xl font-bold mb-2 tracking-widest" style={{ fontFamily: 'Rajdhani, sans-serif' }}>PAUSED</div>
-            <div className="text-white/50 text-sm mb-6">ESC to resume</div>
-            <div className="flex gap-3 justify-center">
-              <button onClick={onPause} className="px-6 py-3 bg-white/15 hover:bg-white/25 text-white font-bold rounded tracking-wider transition-colors">▶ RESUME</button>
-              <button onClick={onReset} className="px-6 py-3 bg-white/10 hover:bg-white/20 text-white/80 font-bold rounded tracking-wider transition-colors">↺ RESPAWN</button>
+            <div className="text-white/50 text-sm mb-6">Press ESC to resume</div>
+            <div className="flex flex-col gap-2">
+              <button onClick={onPause} className="w-full px-6 py-3 bg-white/15 hover:bg-white/25 text-white font-bold rounded tracking-wider transition-colors">▶ RESUME</button>
+              <button onClick={onReset} className="w-full px-6 py-3 bg-white/10 hover:bg-white/20 text-white/80 font-bold rounded tracking-wider transition-colors">↺ RESPAWN</button>
+              <div className="border-t border-white/10 my-1" />
+              <button onClick={onMuteToggle} className="w-full px-6 py-2.5 bg-white/07 hover:bg-white/15 text-white/70 font-bold rounded tracking-wider transition-colors text-sm">
+                {muted ? '🔇 Unmute Sound' : '🔊 Sound On'}
+              </button>
+              <button onClick={onTimeToggle} className="w-full px-6 py-2.5 bg-white/07 hover:bg-white/15 text-white/70 font-bold rounded tracking-wider transition-colors text-sm">
+                🕒 Toggle Time of Day
+              </button>
+              <div className="border-t border-white/10 my-1" />
+              <button onClick={onBack} className="w-full px-6 py-2.5 bg-white/05 hover:bg-white/15 text-white/50 hover:text-white font-bold rounded tracking-wider transition-colors text-sm">
+                ← Back to Menu
+              </button>
             </div>
           </div>
         </div>

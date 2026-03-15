@@ -66,7 +66,7 @@ export class InputManager {
     const honk = this.key('KeyH')
     const lookBack = this.key('KeyB')
     const cameraToggle = this.justPressed('KeyC')
-    const pauseToggle = this.justPressed('Escape')
+    const pauseToggle = this.justPressed('Escape') || this.justPressed('KeyP')
     const exitEnterToggle = this.justPressed('KeyF')
     const sprint = this.key('Space')
     const jump   = this.key('ShiftLeft', 'ShiftRight')

@@ -1,41 +1,90 @@
 import * as THREE from 'three'
 
-export function setupLighting(scene: THREE.Scene, renderer: THREE.WebGLRenderer) {
-  // Sky (Georgian blue)
-  scene.background = new THREE.Color(0x87ceeb)
-  scene.fog = new THREE.FogExp2(0xaad4ee, 0.0035)
+export interface LightingController {
+  setMode: (mode: 'day' | 'night') => void
+  getMode: () => 'day' | 'night'
+}
+
+export function setupLighting(scene: THREE.Scene): LightingController {
+  let mode: 'day' | 'night' = 'day'
+
+  // Day colors
+  const daySky = new THREE.Color(0x87ceeb)
+  const dayFog = new THREE.Color(0xaad4ee)
+  
+  // Night colors
+  const nightSky = new THREE.Color(0x020408)
+  const nightFog = new THREE.Color(0x050810)
+
+  scene.background = daySky
+  scene.fog = new THREE.FogExp2(dayFog, 0.0035)
 
   // Ambient sky + ground hemisphere
   const hemi = new THREE.HemisphereLight(0x87ceeb, 0x8b7355, 0.9)
   hemi.position.set(0, 200, 0)
   scene.add(hemi)
 
-  // Sun (directional) — afternoon Georgian sun
-  const sun = new THREE.DirectionalLight(0xfffce8, 2.6)
+  // Sun (directional) — Warm San Andreas Golden Hour
+  const sun = new THREE.DirectionalLight(0xffd27d, 3.2)
   sun.position.set(120, 250, 80)
   sun.castShadow = true
-  sun.shadow.mapSize.width = 1024
-  sun.shadow.mapSize.height = 1024
+  sun.shadow.mapSize.width = 2048
+  sun.shadow.mapSize.height = 2048
   sun.shadow.camera.near = 1
-  sun.shadow.camera.far = 400
-  sun.shadow.camera.left = -150
-  sun.shadow.camera.right = 150
-  sun.shadow.camera.top = 150
-  sun.shadow.camera.bottom = -150
-  sun.shadow.bias = -0.0002
-  sun.shadow.normalBias = 0.02
+  sun.shadow.camera.far = 500
+  sun.shadow.camera.left = -200
+  sun.shadow.camera.right = 200
+  sun.shadow.camera.top = 200
+  sun.shadow.camera.bottom = -200
+  sun.shadow.bias = -0.0001
+  sun.shadow.normalBias = 0.05
   scene.add(sun)
 
   // Fill light (bounce off buildings)
-  const fill = new THREE.DirectionalLight(0xd4e8ff, 0.5)
+  const fill = new THREE.DirectionalLight(0xffaa44, 0.8)
   fill.position.set(-80, 100, -60)
   scene.add(fill)
 
   // Ambient (gentle global)
-  const ambient = new THREE.AmbientLight(0x404468, 0.4)
+  const ambient = new THREE.AmbientLight(0x404468, 0.2)
   scene.add(ambient)
 
-  // Street lamps will be added by the world
+  return {
+    setMode: (newMode) => {
+      mode = newMode
+      if (mode === 'day') {
+        scene.background = daySky
+        if (scene.fog instanceof THREE.FogExp2) {
+          scene.fog.color = dayFog
+          scene.fog.density = 0.0035
+        }
+        hemi.intensity = 0.9
+        sun.intensity = 2.6
+        fill.intensity = 0.5
+        ambient.intensity = 0.4
+      } else {
+        scene.background = nightSky
+        if (scene.fog instanceof THREE.FogExp2) {
+          scene.fog.color = nightFog
+          scene.fog.density = 0.008 // thicker night fog
+        }
+        hemi.intensity = 0.15
+        sun.intensity = 0.05 // faint moonlight
+        fill.intensity = 0.02
+        ambient.intensity = 0.08
+      }
+      
+      // Update emissive objects in the scene
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
+          if (obj.name === 'lamp-lens' || obj.name === 'headlight-lens') {
+            obj.material.emissiveIntensity = mode === 'day' ? 1.0 : 8.0
+          }
+        }
+      })
+    },
+    getMode: () => mode,
+  }
 }
 
 export function createStreetLamp(
@@ -46,18 +95,18 @@ export function createStreetLamp(
 ): THREE.Group {
   const group = new THREE.Group()
 
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness: 0.6, roughness: 0.5 })
-  const headMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.4, roughness: 0.6 })
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.6, roughness: 0.5 })
+  const headMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.4, roughness: 0.6 })
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0xffeeaa,
-    emissive: new THREE.Color(0xffee88),
+    emissive: new THREE.Color(0xffaa44),
     emissiveIntensity: 1.0,
   })
 
   // Pole
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 8.5, 8), poleMat)
   pole.position.set(0, 4.25, 0)
-  pole.castShadow = false
+  pole.castShadow = true
   group.add(pole)
 
   // Arm
@@ -71,10 +120,14 @@ export function createStreetLamp(
   head.position.set(1.8, 8.2, 0)
   group.add(head)
 
-  // Lens (emissive glow — no real PointLight to keep draw calls low)
+  // Lens (emissive glow)
   const lens = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.10, 0.28), glassMat)
+  lens.name = 'lamp-lens'
   lens.position.set(1.8, 8.1, 0)
   group.add(lens)
+  
+  // Actual light source for night (optional performance-wise)
+  // For now we'll just use the emissive + bloom.
 
   // Base
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.3, 8), poleMat)

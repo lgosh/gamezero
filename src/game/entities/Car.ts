@@ -15,10 +15,12 @@ export interface CarConfig {
   maxBrakeForce: number
   maxSteeringAngle: number
   rollInfluence: number
-  // wheel offsets from chassis center
-  wheelPositions: [CANNON.Vec3, CANNON.Vec3, CANNON.Vec3, CANNON.Vec3]
+  // wheel offsets from chassis center (fallback if auto-detection fails)
+  wheelPositions: CANNON.Vec3[]
   chassisHalfExtents: CANNON.Vec3
   chassisOffset: CANNON.Vec3 // visual mesh offset from physics center
+  /** Override Y for chassisConnectionPointLocal (auto-detected Y from model is wrong for physics) */
+  wheelConnectionY?: number
 }
 
 export interface DamageZone {
@@ -78,7 +80,7 @@ export class Car {
     scene.add(this.group)
   }
 
-  protected buildPhysics(startPos: THREE.Vector3) {
+  protected buildPhysics(startPos: THREE.Vector3, detectedWheelPositions?: CANNON.Vec3[]) {
     const cfg = this.config
 
     this.chassisBody = new CANNON.Body({
@@ -116,16 +118,21 @@ export class Car {
       useCustomSlidingRotationalSpeed: true,
     }
 
-    for (const pos of cfg.wheelPositions) {
+    // Use detected positions if available, otherwise fallback to config
+    const positions = (detectedWheelPositions && detectedWheelPositions.length === 4) 
+      ? detectedWheelPositions 
+      : cfg.wheelPositions
+
+    const connY = cfg.wheelConnectionY ?? -0.05
+    for (const pos of positions) {
       this.vehicle.addWheel({
         ...baseWheel,
-        chassisConnectionPointLocal: pos,
+        chassisConnectionPointLocal: new CANNON.Vec3(pos.x, connY, pos.z),
       })
     }
 
     this.vehicle.addToWorld(this.physicsWorld.world)
 
-    // Listen for collisions
     this.chassisBody.addEventListener('collide', (event: { contact: CANNON.ContactEquation }) => {
       const impact = event.contact.getImpactVelocityAlongNormal()
       this.onCollision(Math.abs(impact), event.contact)
@@ -235,34 +242,42 @@ export class Car {
     const prevGearIndex = this.gearIndex
 
     if (input.brake > 0 && forwardSpeedMs < 1) {
-      // Reverse: brake key while stopped or already rolling backward
+      // Reverse
       this.gearIndex = 0
     } else if (input.throttle > 0 && this.gearIndex === 0) {
-      // Pull out of reverse when throttle pressed
       this.gearIndex = 2
     } else if (this.gearIndex !== 0) {
-      // Normal auto-shift (never touches reverse gear)
       this.autoShift()
     }
-    // If in reverse and no brake/throttle input, stay in reverse — don't call autoShift
 
-    const gearRatio = this.GEAR_RATIOS[this.gearIndex] ?? 1
-    this.gear = this.gearIndex  // HUD maps 0=R,1=N,2=1st,…7=6th
+    this.gear = this.gearIndex
 
-    // RPM snap on gear change — realistic rev drop/rise between gears
+    // RPM Simulation based on Gear Ratio
     const maxRPM = 7500
     const idleRPM = 800
-    if (this.gearIndex !== prevGearIndex) {
-      const oldRatio = Math.abs(this.GEAR_RATIOS[prevGearIndex] ?? 1)
-      const newRatio = Math.abs(this.GEAR_RATIOS[this.gearIndex] ?? 1)
-      if (oldRatio > 0 && newRatio > 0 && prevGearIndex >= 2 && this.gearIndex >= 2) {
-        // Snap RPM proportionally — e.g. upshift drops RPM, downshift raises it
-        this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm * (newRatio / oldRatio)))
-      } else {
-        // Entering/leaving neutral or reverse: drop to idle
-        this.rpm = idleRPM + 200
-      }
+    
+    if (this.gearIndex <= 1) {
+      // Neutral/Reverse logic
+      const targetRPM = idleRPM + input.throttle * 3000
+      this.rpm += (targetRPM - this.rpm) * Math.min(1, dt * 4)
+    } else {
+      // Drive gears: RPM proportional to speed * ratio
+      const ratio = Math.abs(this.GEAR_RATIOS[this.gearIndex])
+      // Constant chosen so that at 240km/h in top gear (0.72) we are near redline
+      const speedFactor = 35 
+      let targetRPM = idleRPM + (this.speedKmh * ratio * speedFactor)
+      
+      // Add some "throttle blip" or "load" effect
+      targetRPM += input.throttle * 600
+
+      // If we just shifted, allow the RPM to drop and stay down for a moment
+      const shiftDropFactor = this.gearIndex > prevGearIndex ? 0.5 : 1.0
+      const lerpSpeed = this.gearIndex !== prevGearIndex ? 1.0 : 5.0
+      
+      this.rpm = THREE.MathUtils.lerp(this.rpm, targetRPM, Math.min(1, dt * lerpSpeed))
     }
+    
+    this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm))
 
     // Engine force — cannon-es convention: negative = forward, positive = backward
     const logicalForce =
@@ -280,37 +295,30 @@ export class Car {
     // Steering — cannon-es: positive steer = left turn, so negate our convention
     const steer = -input.steering * maxSteer
 
-    // Apply to vehicle
-    this.vehicle.applyEngineForce(logicalForce, 2)
-    this.vehicle.applyEngineForce(logicalForce, 3)
-    this.vehicle.setSteeringValue(steer, 0)
-    this.vehicle.setSteeringValue(steer, 1)
+    // Apply to vehicle (only if wheels exist)
+    if (this.vehicle.wheelInfos.length >= 4) {
+      this.vehicle.applyEngineForce(logicalForce, 2)
+      this.vehicle.applyEngineForce(logicalForce, 3)
+      this.vehicle.setSteeringValue(steer, 0)
+      this.vehicle.setSteeringValue(steer, 1)
 
-    // Front brakes harder
-    this.vehicle.setBrake(brakeF * 0.7, 0)
-    this.vehicle.setBrake(brakeF * 0.7, 1)
-    this.vehicle.setBrake(brakeF * 0.3, 2)
-    this.vehicle.setBrake(brakeF * 0.3, 3)
+      // Front brakes harder
+      this.vehicle.setBrake(brakeF * 0.7, 0)
+      this.vehicle.setBrake(brakeF * 0.7, 1)
+      this.vehicle.setBrake(brakeF * 0.3, 2)
+      this.vehicle.setBrake(brakeF * 0.3, 3)
 
-    // Handbrake locks rear wheels and reduces rear grip for drifting
-    if (input.handbrake) {
-      this.vehicle.setBrake(maxBrakeForce * 5, 2)
-      this.vehicle.setBrake(maxBrakeForce * 5, 3)
-      this.vehicle.wheelInfos[2].frictionSlip = 0.3
-      this.vehicle.wheelInfos[3].frictionSlip = 0.3
-    } else {
-      this.vehicle.wheelInfos[2].frictionSlip = this.config.wheelFriction
-      this.vehicle.wheelInfos[3].frictionSlip = this.config.wheelFriction
+      // Handbrake locks rear wheels and reduces rear grip for drifting
+      if (input.handbrake) {
+        this.vehicle.setBrake(maxBrakeForce * 5, 2)
+        this.vehicle.setBrake(maxBrakeForce * 5, 3)
+        this.vehicle.wheelInfos[2].frictionSlip = 0.3
+        this.vehicle.wheelInfos[3].frictionSlip = 0.3
+      } else {
+        this.vehicle.wheelInfos[2].frictionSlip = this.config.wheelFriction
+        this.vehicle.wheelInfos[3].frictionSlip = this.config.wheelFriction
+      }
     }
-
-    // RPM simulation — chase target smoothly; at idle use slow convergence for stable hum
-    const targetRPM =
-      this.gearIndex <= 1
-        ? idleRPM + input.throttle * 1500
-        : idleRPM + (this.speedKmh / 240) * (maxRPM - idleRPM) + input.throttle * 800
-    const rpmRate = input.throttle > 0.05 ? 5 : 2  // slow down at idle to avoid oscillation
-    this.rpm += (targetRPM - this.rpm) * Math.min(1, dt * rpmRate)
-    this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm))
 
     // Sync visual mesh to physics
     this.syncVisual()
@@ -345,13 +353,16 @@ export class Car {
     }
   }
 
-  private syncVisual() {
+  syncVisual() {
     // Sync chassis mesh to physics body
     const pos = this.chassisBody.position
     const quat = this.chassisBody.quaternion
 
     this.group.position.set(pos.x, pos.y, pos.z)
     this.group.quaternion.set(quat.x, quat.y, quat.z, quat.w)
+
+    // Offset the chassis mesh so it matches the physics shape's offset
+    this.chassisMesh.position.copy(this.config.chassisOffset)
 
     // Sync wheel meshes
     this.vehicle.wheelInfos.forEach((wheel, i) => {
@@ -401,10 +412,39 @@ export class Car {
   }
 
   reset(pos: THREE.Vector3) {
-    this.chassisBody.position.set(pos.x, pos.y + 2, pos.z)
+    // Remove vehicle from world to flush ALL stale cannon-es contact constraints
+    // from the crash frame. Without this, old wheel contacts generate forces at
+    // the new spawn position and launch the car into buildings.
+    this.vehicle.removeFromWorld(this.physicsWorld.world)
+
+    // Spawn higher so the car doesn't clip into the ground on the first frame
+    this.chassisBody.position.set(pos.x, pos.y + 4, pos.z)
+    // Copy position to previousPosition so cannon-es doesn't compute a
+    // spurious velocity from the teleport delta on the next integration step.
+    this.chassisBody.previousPosition.copy(this.chassisBody.position)
     this.chassisBody.velocity.set(0, 0, 0)
     this.chassisBody.angularVelocity.set(0, 0, 0)
     this.chassisBody.quaternion.set(0, 0, 0, 1)
+    this.chassisBody.previousQuaternion.copy(this.chassisBody.quaternion)
+    this.chassisBody.force.set(0, 0, 0)
+    this.chassisBody.torque.set(0, 0, 0)
+
+    // Re-add vehicle with clean state
+    this.vehicle.addToWorld(this.physicsWorld.world)
+
+    // Clear all wheel forces
+    for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+      this.vehicle.applyEngineForce(0, i)
+      this.vehicle.setBrake(0, i)
+      this.vehicle.setSteeringValue(0, i)
+      const w = this.vehicle.wheelInfos[i]
+      w.suspensionForce = 0
+      w.engineForce = 0
+      w.brake = 0
+      w.steering = 0
+      w.deltaRotation = 0
+    }
+
     this.damage = 0
     this.smokeEmitting = false
     this.spawnImmunityTimer = 2.0

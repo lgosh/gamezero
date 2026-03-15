@@ -1,73 +1,79 @@
 import * as THREE from 'three'
 
-/** Creates road surface texture */
-function createRoadTexture(): THREE.CanvasTexture {
+/** Creates a stone paving canvas texture */
+function makeStoneTex(isCobble = false): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
-  canvas.width = 512
-  canvas.height = 512
+  canvas.width = 512; canvas.height = 512
   const ctx = canvas.getContext('2d')!
 
-  // Asphalt
-  ctx.fillStyle = '#2a2a2a'
+  ctx.fillStyle = isCobble ? '#7a7068' : '#a0a0a0'
   ctx.fillRect(0, 0, 512, 512)
 
-  // Random noise/cracks for realism
-  for (let i = 0; i < 600; i++) {
-    const x = Math.random() * 512
-    const y = Math.random() * 512
-    ctx.fillStyle = `rgba(${30 + Math.random() * 20},${30 + Math.random() * 20},${30 + Math.random() * 20},0.5)`
-    ctx.fillRect(x, y, 1 + Math.random() * 3, 1 + Math.random() * 3)
-  }
+  const rows = isCobble ? 16 : 8
+  const cols = isCobble ? 12 : 8
+  const rw = 512 / cols
+  const rh = 512 / rows
 
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)'
+  ctx.lineWidth = 2
+
+  for (let r = 0; r < rows; r++) {
+    const offset = (r % 2) * (rw / 2)
+    for (let c = -1; c <= cols; c++) {
+      const x = c * rw + offset
+      const y = r * rh
+      const shade = 0.8 + Math.random() * 0.4
+      ctx.fillStyle = `rgba(${Math.floor(120*shade)},${Math.floor(120*shade)},${Math.floor(120*shade)},1)`
+      if (isCobble) {
+        ctx.beginPath()
+        ctx.roundRect(x + 2, y + 2, rw - 4, rh - 4, 4)
+        ctx.fill()
+        ctx.stroke()
+      } else {
+        ctx.strokeRect(x, y, rw, rh)
+      }
+    }
+  }
   return new THREE.CanvasTexture(canvas)
 }
 
-function createPavementTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 256
-  const ctx = canvas.getContext('2d')!
+// Shared texture instances — created ONCE and reused for all surfaces.
+// This means even if two planes overlap and fight for a pixel, they show the
+// same pattern, so there is no visible flickering.
+let _stoneTex: THREE.CanvasTexture | null = null
+let _cobbleTex: THREE.CanvasTexture | null = null
 
-  // Base pavement color
-  ctx.fillStyle = '#b8b0a0'
-  ctx.fillRect(0, 0, 256, 256)
-
-  // Stone blocks
-  const blockW = 64
-  const blockH = 48
-  ctx.strokeStyle = '#888078'
-  ctx.lineWidth = 2
-  for (let r = 0; r < 256; r += blockH) {
-    const offset = Math.floor(r / blockH) % 2 === 0 ? 0 : blockW / 2
-    for (let c = -blockW; c < 256 + blockW; c += blockW) {
-      ctx.strokeRect(c + offset, r, blockW, blockH)
-    }
+function stoneTex(): THREE.CanvasTexture {
+  if (!_stoneTex) {
+    _stoneTex = makeStoneTex(false)
+    _stoneTex.wrapS = _stoneTex.wrapT = THREE.RepeatWrapping
   }
+  return _stoneTex
+}
 
-  return new THREE.CanvasTexture(canvas)
+function cobbleTex(): THREE.CanvasTexture {
+  if (!_cobbleTex) {
+    _cobbleTex = makeStoneTex(true)
+    _cobbleTex.wrapS = _cobbleTex.wrapT = THREE.RepeatWrapping
+  }
+  return _cobbleTex
 }
 
 export function createGround(scene: THREE.Scene) {
-  const roadTex = createRoadTexture()
-  roadTex.wrapS = THREE.RepeatWrapping
-  roadTex.wrapT = THREE.RepeatWrapping
-  roadTex.repeat.set(60, 60)
-
-  // Main ground plane
-  const groundGeo = new THREE.PlaneGeometry(1200, 1200)
-  const groundMat = new THREE.MeshStandardMaterial({
-    map: roadTex,
-    roughness: 0.92,
-    metalness: 0.0,
-    color: 0x2a2a2a,
-  })
+  const tex = stoneTex()
+  tex.repeat.set(80, 80)
+  const groundGeo = new THREE.PlaneGeometry(1500, 1500)
+  const groundMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, color: 0x888888, depthWrite: false })
   const ground = new THREE.Mesh(groundGeo, groundMat)
+  ground.renderOrder = 0
   ground.rotation.x = -Math.PI / 2
+  ground.position.y = -0.05
   ground.receiveShadow = true
   scene.add(ground)
-
   return ground
 }
+
+let _roadIndex = 0
 
 export function createRoad(
   scene: THREE.Scene,
@@ -77,26 +83,19 @@ export function createRoad(
   length: number,
   rotation = 0
 ) {
-  const roadTex = createRoadTexture()
-  roadTex.wrapS = THREE.RepeatWrapping
-  roadTex.wrapT = THREE.RepeatWrapping
-  roadTex.repeat.set(width / 10, length / 10)
+  const tex = stoneTex()
+  tex.repeat.set(width / 8, length / 8)
 
   const geo = new THREE.PlaneGeometry(width, length)
-  const mat = new THREE.MeshStandardMaterial({
-    map: roadTex,
-    roughness: 0.88,
-    metalness: 0.0,
-    color: 0x303030,
-  })
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, color: 0x909090 })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.rotation.x = -Math.PI / 2
   mesh.rotation.z = rotation
-  mesh.position.set(x, 0.01, z)
+  const idx = _roadIndex++
+  mesh.renderOrder = 1 + idx
+  mesh.position.set(x, 0.01 + (idx * 0.002), z)
   mesh.receiveShadow = true
   scene.add(mesh)
-
-  addLaneMarkings(scene, x, z, width, length, rotation)
   return mesh
 }
 
@@ -111,7 +110,6 @@ function addLaneMarkings(
   const markMat = new THREE.MeshBasicMaterial({ color: 0xffffff })
   const yellowMat = new THREE.MeshBasicMaterial({ color: 0xffee00 })
 
-  // Center line (yellow dashed)
   const dashCount = Math.floor(length / 8)
   for (let i = 0; i < dashCount; i++) {
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 4.5), yellowMat)
@@ -122,7 +120,6 @@ function addLaneMarkings(
     scene.add(dash)
   }
 
-  // Edge lines
   for (const side of [-1, 1]) {
     const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.2, length), markMat)
     edge.rotation.x = -Math.PI / 2
@@ -138,82 +135,54 @@ export function createSidewalk(
   z: number,
   width: number,
   length: number,
-  rotation = 0
+  rotation = 0,
+  style: 'modern' | 'cobble' = 'modern'
 ) {
-  const paveTex = createPavementTexture()
-  paveTex.wrapS = THREE.RepeatWrapping
-  paveTex.wrapT = THREE.RepeatWrapping
-  paveTex.repeat.set(width / 4, length / 4)
+  const isCobble = style === 'cobble'
+  const tex = isCobble ? cobbleTex() : stoneTex()
+  tex.repeat.set(width / 4, length / 4)
 
-  // Raised sidewalk
-  const geo = new THREE.BoxGeometry(width, 0.14, length)
+  const geo = new THREE.BoxGeometry(width, 0.2, length)
   const mat = new THREE.MeshStandardMaterial({
-    map: paveTex,
-    roughness: 0.88,
-    color: 0xb8b0a0,
+    map: tex,
+    roughness: 0.8,
+    color: isCobble ? 0x908880 : 0xb0b0b0,
   })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.rotation.y = rotation
-  mesh.position.set(x, 0.07, z)
+  mesh.position.set(x, 0.1, z)
   mesh.receiveShadow = true
   scene.add(mesh)
-
-  // Curb
-  const curbMat = new THREE.MeshStandardMaterial({ color: 0xaaa090, roughness: 0.9 })
-  for (const side of [-1, 1]) {
-    const curb = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, length), curbMat)
-    curb.rotation.y = rotation
-    curb.position.set(x + side * (width / 2 - 0.08), 0.07, z)
-    scene.add(curb)
-  }
-
   return mesh
 }
 
 export function createRoundabout(scene: THREE.Scene, cx: number, cz: number, innerR: number, outerR: number) {
-  const roadTex = createRoadTexture()
-  roadTex.wrapS = THREE.RepeatWrapping
-  roadTex.wrapT = THREE.RepeatWrapping
-  roadTex.repeat.set(6, 6)
+  const tex = stoneTex()
+  tex.repeat.set(8, 8)
 
-  // Ring road
+  // Ring road — rendered at a very high renderOrder so it always draws on top of
+  // all the radial roads that overlap in the central area
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(innerR, outerR, 64),
-    new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.88, color: 0x303030 })
+    new THREE.MeshStandardMaterial({ map: tex, roughness: 0.75, color: 0x909090 })
   )
+  ring.renderOrder = 500
   ring.rotation.x = -Math.PI / 2
-  ring.position.set(cx, 0.01, cz)
+  ring.position.set(cx, 0.025, cz)
   ring.receiveShadow = true
   scene.add(ring)
 
-  // Lane marking on roundabout
-  const markMat = new THREE.MeshBasicMaterial({ color: 0xffffff })
-  const innerEdge = new THREE.Mesh(
-    new THREE.RingGeometry(innerR, innerR + 0.25, 64),
-    markMat
-  )
-  innerEdge.rotation.x = -Math.PI / 2
-  innerEdge.position.set(cx, 0.02, cz)
-  scene.add(innerEdge)
-
+  // Outer lane marking
+  const markMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 })
   const outerEdge = new THREE.Mesh(
-    new THREE.RingGeometry(outerR - 0.25, outerR, 64),
+    new THREE.RingGeometry(outerR - 0.4, outerR - 0.1, 64),
     markMat
   )
+  outerEdge.renderOrder = 501
   outerEdge.rotation.x = -Math.PI / 2
-  outerEdge.position.set(cx, 0.02, cz)
+  outerEdge.position.set(cx, 0.03, cz)
   scene.add(outerEdge)
 
-  // Central plaza (stone/pavement)
-  const plaza = new THREE.Mesh(
-    new THREE.CircleGeometry(innerR, 64),
-    new THREE.MeshStandardMaterial({
-      color: 0xc8c0b0,
-      roughness: 0.8,
-    })
-  )
-  plaza.rotation.x = -Math.PI / 2
-  plaza.position.set(cx, 0.05, cz)  // raised above ring road (0.01) to prevent z-fighting
-  plaza.receiveShadow = true
-  scene.add(plaza)
+  // NO central plaza — it was an extra overlapping layer causing z-fighting.
+  // The ground plane provides the base for the inner circle area.
 }

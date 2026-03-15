@@ -15,7 +15,7 @@ export class PhysicsWorld {
       gravity: new CANNON.Vec3(0, -15, 0),
     })
 
-    this.world.broadphase = new CANNON.SAPBroadphase(this.world)
+    this.world.broadphase = new CANNON.NaiveBroadphase()
     this.world.allowSleep = true
     ;(this.world.solver as unknown as { iterations: number }).iterations = 10
 
@@ -29,8 +29,8 @@ export class PhysicsWorld {
     this.propMaterial = new CANNON.Material('prop')
 
     const carGround = new CANNON.ContactMaterial(this.carMaterial, this.groundMaterial, {
-      friction: 0.6,
-      restitution: 0.0,
+      friction: 0.8,
+      restitution: 0.1,
     })
     const carBuilding = new CANNON.ContactMaterial(this.carMaterial, this.buildingMaterial, {
       friction: 0.4,
@@ -56,7 +56,8 @@ export class PhysicsWorld {
   addStaticBox(
     halfExtents: CANNON.Vec3,
     position: CANNON.Vec3,
-    material?: CANNON.Material
+    material?: CANNON.Material,
+    yawAngle = 0
   ): CANNON.Body {
     const body = new CANNON.Body({
       mass: 0,
@@ -64,6 +65,9 @@ export class PhysicsWorld {
     })
     body.addShape(new CANNON.Box(halfExtents))
     body.position.copy(position)
+    if (yawAngle !== 0) {
+      body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), yawAngle)
+    }
     this.world.addBody(body)
     return body
   }

@@ -84,8 +84,8 @@ export class CameraSystem {
         this.initialized = true
       }
 
-      this.currentPos.lerp(idealPos, Math.min(1, dt * 4))
-      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 8))
+      this.currentPos.lerp(idealPos, Math.min(1, dt * 12)) // Increased from 4
+      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 18)) // Increased from 8
 
     } else if (this.mode === 'cockpit') {
       const right = new THREE.Vector3().crossVectors(carUp, carForward).normalize()

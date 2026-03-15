@@ -1,4 +1,8 @@
 import * as THREE from 'three'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass'
 import { PhysicsWorld } from './PhysicsWorld'
 import { InputManager } from './InputManager'
 import { SoundSystem } from './SoundSystem'
@@ -22,12 +26,15 @@ export interface HUDState {
   state: GameState
   carType: CarType
   onFoot?: boolean
+  playerPos?: { x: number; z: number }
+  playerHeading?: number
 }
 
 export class GameEngine {
   private scene!: THREE.Scene
   private camera!: THREE.PerspectiveCamera
   private renderer!: THREE.WebGLRenderer
+  private composer!: EffectComposer
   private clock!: THREE.Clock
 
   private physicsWorld!: PhysicsWorld
@@ -37,6 +44,7 @@ export class GameEngine {
   private particleSystem!: ParticleSystem
   private map!: TbilisiMap
   private car!: Car
+  private parkedCar!: Car   // second car always spawned at start
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
 
@@ -73,20 +81,39 @@ export class GameEngine {
     // ─── Renderer ─────────────────────────────────────────────────────────────
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: false,
       powerPreference: 'high-performance',
+      stencil: false,
+      depth: true,
+      logarithmicDepthBuffer: true,
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight)
     this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFShadowMap  // PCFSoft is slower
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.15
+    this.renderer.toneMappingExposure = 1.0
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
     // ─── Scene & Camera ───────────────────────────────────────────────────────
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(68, canvas.clientWidth / canvas.clientHeight, 0.3, 1200)
+    this.camera = new THREE.PerspectiveCamera(68, canvas.clientWidth / canvas.clientHeight, 0.3, 1500)
+
+    // ─── Post-processing ──────────────────────────────────────────────────────
+    this.composer = new EffectComposer(this.renderer)
+    const renderPass = new RenderPass(this.scene, this.camera)
+    this.composer.addPass(renderPass)
+
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
+      0.18, // Reduced from 0.4
+      0.4,  // radius
+      0.9   // Increased threshold from 0.85
+    )
+    this.composer.addPass(bloomPass)
+
+    const outputPass = new OutputPass()
+    this.composer.addPass(outputPass)
 
     // ─── Environment map — critical for realistic metallic car paint ───────────
     const pmrem = new THREE.PMREMGenerator(this.renderer)
@@ -119,26 +146,44 @@ export class GameEngine {
     this.map = new TbilisiMap(this.scene, this.physicsWorld)
     this.map.build()
 
-    // ─── Car ─────────────────────────────────────────────────────────────────
-    const startPos = new THREE.Vector3(0, 1, 55)
-    if (carType === 'bmw') {
-      this.car = new BMW(this.scene, this.physicsWorld)
-      await (this.car as BMW).spawn(startPos)
-    } else {
-      this.car = new Mercedes(this.scene, this.physicsWorld)
-      await (this.car as Mercedes).spawn(startPos)
-    }
-    // If destroy() was called while the model was loading, abort silently
+    // ─── Cars — both spawned side by side so player can choose ──────────────
+    const mercedesPos = new THREE.Vector3(-4, 2.0, 35)
+    const bmwPos      = new THREE.Vector3( 4, 2.0, 35)
+
+    const mercedes = new Mercedes(this.scene, this.physicsWorld)
+    const bmw      = new BMW(this.scene, this.physicsWorld)
+    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos)])
+
     if (this.destroyed) {
-      this.car.dispose()
+      mercedes.dispose(); bmw.dispose()
       return
     }
 
-    // Wire crash sound + camera shake to physics impacts
-    this.car.onImpact = (impact: number) => {
-      this.soundSystem.playCrash(Math.min(impact / 22, 1))
-      this.cameraSystem.shake(impact * 0.12)
+    // Active car starts as whichever the player picked from the menu; the other is parked
+    if (carType === 'bmw') {
+      this.car = bmw; this.parkedCar = mercedes
+    } else {
+      this.car = mercedes; this.parkedCar = bmw
     }
+
+    // Wire crash sound + camera shake to physics impacts
+    const wireImpact = (car: Car) => {
+      car.onImpact = (impact: number) => {
+        if (car === this.car) {
+          this.soundSystem.playCrash(Math.min(impact / 22, 1))
+          this.cameraSystem.shake(impact * 0.12)
+        }
+      }
+    }
+    wireImpact(mercedes)
+    wireImpact(bmw)
+
+    // Both cars parked at start — player spawns on foot between them to choose
+    this.car.chassisBody.sleep()
+    this.parkedCar.chassisBody.sleep()
+    const playerStart = new THREE.Vector3(0, 1.0, 35)
+    this.player = new Player(this.scene, this.physicsWorld, playerStart, 0)
+    this.gameMode = 'onfoot'
 
     // ─── Resize ───────────────────────────────────────────────────────────────
     window.addEventListener('resize', this.onResize)
@@ -177,7 +222,8 @@ export class GameEngine {
     if (this.state === 'playing') {
       this.update(dt, input)
     }
-    this.renderer.render(this.scene, this.camera)
+
+    this.composer.render()
   }
 
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
@@ -185,16 +231,28 @@ export class GameEngine {
     this.physicsWorld.step(dt)
     this.map.syncProps()
 
+    let currentPlayerPos = { x: 0, z: 0 }
+    let currentHeading = 0
+
     // ── On-foot mode ─────────────────────────────────────────────────────────
     if (this.gameMode === 'onfoot' && this.player) {
+      // Keep parked car meshes in sync with their physics bodies
+      this.car.syncVisual()
+      this.parkedCar.syncVisual()
+
       this.player.update(input, dt)
-      const playerPos = this.player.getPosition()
+      const pPos = this.player.getPosition()
       const playerFwd = this.player.getForwardVector()
-      this.cameraSystem.updateOnFoot(playerPos, playerFwd, dt, this.player.getCameraPitch())
+      this.cameraSystem.updateOnFoot(pPos, playerFwd, dt, this.player.getCameraPitch())
       this.particleSystem.update(dt)
+
+      currentPlayerPos = { x: pPos.x, z: pPos.z }
+      currentHeading = Math.atan2(playerFwd.x, playerFwd.z)
+
       this.lastHUDState = {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
-        state: this.state, carType: this.carType, onFoot: true,
+        state: this.state, carType: this.car instanceof BMW ? 'bmw' : 'mercedes', onFoot: true,
+        playerPos: currentPlayerPos, playerHeading: currentHeading,
       }
       this.onHUDUpdate?.(this.lastHUDState)
       return
@@ -278,6 +336,9 @@ export class GameEngine {
       this.soundSystem.stopEngine()
     }
 
+    currentPlayerPos = { x: carPos.x, z: carPos.z }
+    currentHeading = Math.atan2(carFwd.x, carFwd.z)
+
     // HUD update
     this.lastHUDState = {
       speed: Math.round(speedKmh),
@@ -285,8 +346,10 @@ export class GameEngine {
       gear,
       damage: this.car.damage,
       state: this.state,
-      carType: this.carType,
+      carType: this.car instanceof BMW ? 'bmw' : 'mercedes',
       onFoot: false,
+      playerPos: currentPlayerPos,
+      playerHeading: currentHeading,
     }
     this.onHUDUpdate?.(this.lastHUDState)
   }
@@ -311,8 +374,19 @@ export class GameEngine {
 
   private tryEnterCar() {
     if (!this.player) return
-    const dist = this.player.getPosition().distanceTo(this.car.getPosition())
-    if (dist > 5) return  // too far from car
+    const pPos = this.player.getPosition()
+
+    // Check proximity to both cars — enter whichever is closest within range
+    const distActive = pPos.distanceTo(this.car.getPosition())
+    const distParked = pPos.distanceTo(this.parkedCar.getPosition())
+    const closest    = distActive <= distParked ? this.car : this.parkedCar
+    const closestDist = Math.min(distActive, distParked)
+    if (closestDist > 5) return
+
+    // Swap active/parked if entering the parked car
+    if (closest === this.parkedCar) {
+      const tmp = this.car; this.car = this.parkedCar; this.parkedCar = tmp
+    }
 
     this.player.dispose()
     this.player = null
@@ -331,7 +405,7 @@ export class GameEngine {
     }
     this.gameMode = 'driving'
 
-    const startPos = new THREE.Vector3(0, 1, 55)
+    const startPos = new THREE.Vector3(0, 2.0, 35)
     this.car.reset(startPos)
     this.smoothCarYInit = false
     this.car.chassisBody.wakeUp()
@@ -366,11 +440,18 @@ export class GameEngine {
     }
   }
 
+  toggleTimeOfDay() {
+    if (!this.map || !this.map.lighting) return
+    const current = this.map.lighting.getMode()
+    this.map.lighting.setMode(current === 'day' ? 'night' : 'day')
+  }
+
   private onResize = () => {
     const canvas = this.renderer.domElement
     const w = canvas.clientWidth
     const h = canvas.clientHeight
     this.renderer.setSize(w, h, false)
+    this.composer.setSize(w, h)
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
   }
@@ -382,6 +463,8 @@ export class GameEngine {
     this.inputManager?.destroy()
     this.soundSystem?.destroy()
     this.car?.dispose()
+    this.parkedCar?.dispose()
     this.renderer?.dispose()
   }
 }
+

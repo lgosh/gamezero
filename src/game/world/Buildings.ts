@@ -24,13 +24,13 @@ function createWindowTexture(cols: number, rows: number, style: BuildingConfig['
   const ctx = canvas.getContext('2d')!
 
   // Background — building wall
-  ctx.fillStyle = style === 'modern' ? '#1a2a3a' : style === 'neoclassical' ? '#f0ece0' : '#9a9080'
+  ctx.fillStyle = style === 'modern' ? '#224466' : style === 'neoclassical' ? '#f0ece0' : '#9a9080'
   ctx.fillRect(0, 0, W, H)
 
   const cw = W / cols
   const rh = H / rows
-  const pw = cw * 0.55
-  const ph = rh * 0.65
+  const pw = cw * 0.7 // Larger windows for glass look
+  const ph = rh * 0.8
   const px = (cw - pw) / 2
   const py = (rh - ph) / 2
 
@@ -41,11 +41,11 @@ function createWindowTexture(cols: number, rows: number, style: BuildingConfig['
       const wy = r * rh + py
 
       if (style === 'modern') {
-        // Glass curtain wall look
-        ctx.fillStyle = lit ? '#88bbdd' : '#334455'
+        // Blue Glass curtain wall look
+        ctx.fillStyle = lit ? '#88ccff' : '#1a3a5a'
         ctx.fillRect(wx, wy, pw, ph)
-        ctx.strokeStyle = '#224466'
-        ctx.lineWidth = 1
+        ctx.strokeStyle = '#4488aa'
+        ctx.lineWidth = 2
         ctx.strokeRect(wx, wy, pw, ph)
       } else {
         // Traditional window with frame
@@ -77,9 +77,10 @@ function createBuildingMaterial(config: BuildingConfig): THREE.MeshStandardMater
 
   return new THREE.MeshStandardMaterial({
     map: tex,
-    color: new THREE.Color(config.color),
-    metalness: config.style === 'modern' ? 0.3 : 0.0,
-    roughness: config.style === 'modern' ? 0.1 : 0.85,
+    color: config.style === 'modern' ? new THREE.Color(0x66aaff) : new THREE.Color(config.color),
+    metalness: config.style === 'modern' ? 0.9 : 0.0,
+    roughness: config.style === 'modern' ? 0.02 : 0.85,
+    transparent: false, // Solid blue glass look is better than clear transparency
   })
 }
 

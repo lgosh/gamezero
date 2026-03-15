@@ -3,11 +3,11 @@ import * as CANNON from 'cannon-es'
 import type { PhysicsWorld } from '../PhysicsWorld'
 import type { InputState } from '../InputManager'
 
-const SKIN   = 0x7a4520
-const SHIRT  = 0xf0f0e8
-const JEANS  = 0x1c2c50
-const SHOE   = 0x1a1a1a
-const CAP    = 0xd8d8d8
+const SKIN   = 0x3d2b1f // CJ Skin tone
+const SHIRT  = 0xffffff // White tank top
+const JEANS  = 0x2b3d5c // Blue jeans
+const SHOE   = 0x111111 // Black sneakers
+const HAIR   = 0x111111 // CJ Buzz cut
 
 const WALK_SPEED   = 4.5   // m/s forward
 const SPRINT_SPEED = 9.0   // m/s sprint
@@ -52,16 +52,17 @@ export class Player {
   ) {
     this.heading = startHeading
     this.group = new THREE.Group()
-    this.group.scale.setScalar(0.75)
+    this.group.scale.setScalar(0.85) // CJ is a bit taller/beefier
     scene.add(this.group)
     this.buildMesh()
 
-    // Sphere physics body — radius 0.35, center at feet+0.35
-    this.body = new CANNON.Body({ mass: 75, material: physics.propMaterial })
-    this.body.addShape(new CANNON.Sphere(0.35))
-    this.body.position.set(startPos.x, startPos.y + 0.35, startPos.z)
-    this.body.linearDamping = 0.92
+    // Sphere physics body — radius 0.4, center at feet+0.4
+    this.body = new CANNON.Body({ mass: 75, material: physics.groundMaterial })
+    this.body.addShape(new CANNON.Sphere(0.4))
+    this.body.position.set(startPos.x, startPos.y + 0.4, startPos.z)
+    this.body.linearDamping = 0.8 // Reduced from 0.95
     this.body.angularDamping = 1.0
+    this.body.fixedRotation = true
     this.body.allowSleep = false
     physics.world.addBody(this.body)
   }
@@ -70,23 +71,23 @@ export class Player {
     const g = this.group
 
     // ── Legs (pivot point = hip) ───────────────────────────────────────────
-    for (const [side, isLeft] of [[-0.13, true], [0.13, false]] as [number, boolean][]) {
+    for (const [side, isLeft] of [[-0.15, true], [0.15, false]] as [number, boolean][]) {
       const legGroup = new THREE.Group()
-      legGroup.position.set(side, 0.9, 0)
+      legGroup.position.set(side, 0.95, 0)
 
       // Upper leg (jeans)
-      const upperLeg = box(0.17, 0.44, 0.17, JEANS)
-      upperLeg.position.set(0, -0.22, 0)
+      const upperLeg = box(0.22, 0.5, 0.22, JEANS)
+      upperLeg.position.set(0, -0.25, 0)
       legGroup.add(upperLeg)
 
       // Lower leg (jeans)
-      const lowerLeg = box(0.15, 0.42, 0.15, JEANS)
-      lowerLeg.position.set(0, -0.58, 0)
+      const lowerLeg = box(0.18, 0.45, 0.18, JEANS)
+      lowerLeg.position.set(0, -0.65, 0)
       legGroup.add(lowerLeg)
 
       // Shoe
-      const shoe = box(0.16, 0.1, 0.3, SHOE)
-      shoe.position.set(0, -0.83, 0.06)
+      const shoe = box(0.2, 0.12, 0.35, SHOE)
+      shoe.position.set(0, -0.88, 0.08)
       legGroup.add(shoe)
 
       if (isLeft) {
@@ -98,35 +99,39 @@ export class Player {
     }
 
     // ── Hips ─────────────────────────────────────────────────────────────────
-    const hips = box(0.44, 0.22, 0.24, JEANS)
-    hips.position.set(0, 0.79, 0)
+    const hips = box(0.48, 0.25, 0.28, JEANS)
+    hips.position.set(0, 0.85, 0)
     g.add(hips)
 
-    // ── Belt ─────────────────────────────────────────────────────────────────
-    const belt = box(0.46, 0.06, 0.26, SHOE)
-    belt.position.set(0, 0.92, 0)
-    g.add(belt)
-
-    // ── Torso ─────────────────────────────────────────────────────────────────
-    const torso = box(0.46, 0.50, 0.26, SHIRT)
-    torso.position.set(0, 1.21, 0)
+    // ── Torso (CJ's White Tank Top) ─────────────────────────────────────────
+    const torso = box(0.5, 0.55, 0.3, SHIRT)
+    torso.position.set(0, 1.25, 0)
     g.add(torso)
+    
+    // Tank top "shoulders" - thinner than regular shirt
+    const shoulderL = box(0.12, 0.1, 0.3, SHIRT)
+    shoulderL.position.set(-0.19, 1.5, 0)
+    g.add(shoulderL)
+    const shoulderR = box(0.12, 0.1, 0.3, SHIRT)
+    shoulderR.position.set(0.19, 1.5, 0)
+    g.add(shoulderR)
 
     // ── Arms (pivot = shoulder) ───────────────────────────────────────────────
-    for (const [side, isLeft] of [[-0.28, true], [0.28, false]] as [number, boolean][]) {
+    for (const [side, isLeft] of [[-0.32, true], [0.32, false]] as [number, boolean][]) {
       const armGroup = new THREE.Group()
-      armGroup.position.set(side, 1.40, 0)
+      armGroup.position.set(side, 1.45, 0)
 
-      const upper = cyl(0.065, 0.062, 0.38, SKIN)
-      upper.position.set(0, -0.19, 0)
+      // Upper arm (CJ is muscly - use SKIN for tank top look)
+      const upper = cyl(0.09, 0.08, 0.42, SKIN)
+      upper.position.set(0, -0.21, 0)
       armGroup.add(upper)
 
-      const lower = cyl(0.060, 0.055, 0.34, SKIN)
-      lower.position.set(0, -0.47, 0)
+      const lower = cyl(0.08, 0.07, 0.38, SKIN)
+      lower.position.set(0, -0.55, 0)
       armGroup.add(lower)
 
-      const hand = box(0.09, 0.10, 0.09, SKIN)
-      hand.position.set(0, -0.67, 0)
+      const hand = box(0.11, 0.12, 0.11, SKIN)
+      hand.position.set(0, -0.75, 0)
       armGroup.add(hand)
 
       if (isLeft) {
@@ -138,39 +143,25 @@ export class Player {
     }
 
     // ── Neck ─────────────────────────────────────────────────────────────────
-    const neck = cyl(0.07, 0.08, 0.14, SKIN)
-    neck.position.set(0, 1.52, 0)
+    const neck = cyl(0.08, 0.09, 0.15, SKIN)
+    neck.position.set(0, 1.55, 0)
     g.add(neck)
 
-    // ── Head ─────────────────────────────────────────────────────────────────
+    // ── Head (CJ) ───────────────────────────────────────────────────────────
     const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 12, 10),
+      new THREE.SphereGeometry(0.24, 12, 10),
       new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.85 })
     )
-    head.position.set(0, 1.74, 0)
+    head.position.set(0, 1.78, 0)
     g.add(head)
-
-    // ── Cap ──────────────────────────────────────────────────────────────────
-    const capBand = cyl(0.235, 0.235, 0.14, CAP)
-    capBand.position.set(0, 1.90, 0)
-    g.add(capBand)
-
-    const capDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.225, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: CAP, roughness: 0.85 })
+    
+    // Buzz cut (Hair)
+    const hair = new THREE.Mesh(
+      new THREE.SphereGeometry(0.245, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: HAIR, roughness: 0.9 })
     )
-    capDome.position.set(0, 1.93, 0)
-    g.add(capDome)
-
-    // Brim (flat disc extending forward)
-    const brimGeo = new THREE.CylinderGeometry(0.31, 0.31, 0.03, 16)
-    const brim = new THREE.Mesh(
-      brimGeo,
-      new THREE.MeshStandardMaterial({ color: CAP, roughness: 0.85 })
-    )
-    brim.position.set(0, 1.84, 0.14)
-    brim.scale.z = 0.45
-    g.add(brim)
+    hair.position.set(0, 1.8, 0)
+    g.add(hair)
   }
 
   update(input: InputState, dt: number) {
@@ -211,7 +202,7 @@ export class Player {
     this.rightArmGroup.rotation.x =  swing * 0.5
 
     // Sync visual
-    this.group.position.set(this.body.position.x, this.body.position.y - 0.35, this.body.position.z)
+    this.group.position.set(this.body.position.x, this.body.position.y - 0.4, this.body.position.z)
     this.group.rotation.y = this.heading
   }
 
