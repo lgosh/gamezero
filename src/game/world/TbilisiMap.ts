@@ -250,7 +250,7 @@ export class TbilisiMap {
     addEuropeBetSign(this.scene, -52, 5, 1.2, 0)
 
     // Adjarabet on Georgian block at (52, -8) depth=11 → south face z=-2.5
-    addAdjarabetSign(this.scene, 52, 5, -2.5, 0)
+    addAdjarabetSign(this.scene, 52, 5, -2.4, 0)
 
     // Pharmadepo on Soviet block at (-155, 10) depth=16 → south face z=18
     addPharmadepoSign(this.scene, -155, 7, 18.1, 0)
@@ -298,7 +298,7 @@ export class TbilisiMap {
     )
     body.angularDamping = 0.99
     body.sleep()
-    this.props.push({ body, mesh: group, yOffset: 0 })
+    this.props.push({ body, mesh: group, yOffset: 3.2 })
   }
 
   private addFountain() {
@@ -380,12 +380,12 @@ export class TbilisiMap {
   }
 
   private addBoundaryWalls() {
-    const wallDefs: [number, number, number, number][] = [
-      // x, z, halfW, halfD
-      [0,    250, 250, 2],
-      [0,   -250, 250, 2],
-      [ 250,   0, 2, 250],
-      [-250,   0, 2, 250],
+    // x, z, halfW, halfD, rotY — rotY faces the plane INWARD toward origin
+    const wallDefs: [number, number, number, number, number][] = [
+      [0,    250, 250, 2,  Math.PI],      // North: face -Z (toward origin)
+      [0,   -250, 250, 2,  0],            // South: face +Z (toward origin)
+      [ 250,   0, 2, 250, -Math.PI / 2],  // East:  face -X (toward origin)
+      [-250,   0, 2, 250,  Math.PI / 2],  // West:  face +X (toward origin)
     ]
 
     const wallH = 6
@@ -417,17 +417,16 @@ export class TbilisiMap {
     xTex.wrapS = THREE.RepeatWrapping
     xTex.wrapT = THREE.RepeatWrapping
 
-    for (const [x, z, hw, hd] of wallDefs) {
-      // Physics collider only — no BoxGeometry mesh (was causing z-fighting)
+    for (const [x, z, hw, hd, rotY] of wallDefs) {
+      // Physics collider
       this.physics.addStaticBox(
         new CANNON.Vec3(hw, 10, hd),
         new CANNON.Vec3(x, 10, z)
       )
 
-      const isNS = hw > hd
-      const visW = isNS ? hw * 2 : hd * 2
+      // visW is always the long dimension (the wall's span along its face)
+      const visW = Math.max(hw, hd) * 2
 
-      // Single PlaneGeometry — no duplicate mesh = no z-fighting
       const texCopy = xTex.clone()
       texCopy.repeat.set(visW / 20, wallH / 6)
 
@@ -435,15 +434,15 @@ export class TbilisiMap {
         map: texCopy,
         transparent: true,
         opacity: 0.7,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
         depthWrite: false,
       })
       const plane = new THREE.Mesh(
-        new THREE.PlaneGeometry(isNS ? visW : wallH, wallH),
+        new THREE.PlaneGeometry(visW, wallH),
         mat
       )
       plane.position.set(x, wallH / 2, z)
-      if (!isNS) plane.rotation.y = Math.PI / 2
+      plane.rotation.y = rotY
       this.scene.add(plane)
     }
   }

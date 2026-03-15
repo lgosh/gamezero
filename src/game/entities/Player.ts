@@ -48,6 +48,7 @@ export class Player {
   ) {
     this.heading = startHeading
     this.group = new THREE.Group()
+    this.group.scale.setScalar(0.75)
     scene.add(this.group)
     this.buildMesh()
 

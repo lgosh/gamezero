@@ -362,6 +362,7 @@ export class Car {
       wm.position.set(t.position.x, t.position.y, t.position.z)
       wm.quaternion.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
     })
+
   }
 
   getPosition(): THREE.Vector3 {
@@ -419,7 +420,7 @@ export class Car {
   }
 
   dispose() {
-    this.vehicle.removeFromWorld(this.physicsWorld.world)
+    this.vehicle?.removeFromWorld(this.physicsWorld.world)
     this.scene.remove(this.group)
     for (const wm of this.wheelMeshes) {
       this.scene.remove(wm)

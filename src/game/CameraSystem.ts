@@ -6,6 +6,7 @@ export class CameraSystem {
   private camera: THREE.PerspectiveCamera
   private currentPos = new THREE.Vector3()
   private currentLookAt = new THREE.Vector3()
+  private camDir = new THREE.Vector3(0, 0, 1)  // smoothed horizontal direction
   private shakeIntensity = 0
   private mode: CameraMode = 'chase'
   private initialized = false
@@ -16,62 +17,63 @@ export class CameraSystem {
 
   setMode(mode: CameraMode) {
     this.mode = mode
-    this.initialized = false  // snap to correct position immediately on mode change
+    this.initialized = false
   }
 
   update(
     carPos: THREE.Vector3,
     carForward: THREE.Vector3,
     carUp: THREE.Vector3,
+    carVelocity: THREE.Vector3,
     speedKmh: number,
     dt: number,
     lookBack: boolean
   ) {
-    const dir = lookBack ? carForward.clone().negate() : carForward.clone()
+    // ── Direction used to place the camera behind the car ────────────────────
+    // At speed: use flat velocity direction — unaffected by chassis pitch/bounce.
+    // When slow/stopped: fall back to flat forward so camera doesn't freeze.
+    const flatVel = new THREE.Vector3(carVelocity.x, 0, carVelocity.z)
+    const flatFwd = new THREE.Vector3(carForward.x, 0, carForward.z)
+    if (flatFwd.lengthSq() > 0.001) flatFwd.normalize()
+
+    const useVel = flatVel.lengthSq() > 4  // roughly >2 m/s
+    const targetDir = useVel ? flatVel.normalize() : flatFwd
+
+    // Lazy follow — camera direction lags behind car, feels like GTA
+    this.camDir.lerp(targetDir, Math.min(1, dt * 3)).normalize()
+
+    const dir = lookBack ? this.camDir.clone().negate() : this.camDir.clone()
 
     if (this.mode === 'chase') {
-      const heightBase = 3.5
-      const distBase = 9
-      const extraHeight = Math.min(speedKmh * 0.006, 1.5)
-      const extraDist = Math.min(speedKmh * 0.015, 3)
+      const height = 2.5
+      const dist   = 5.5
 
-      const idealPos = carPos
-        .clone()
-        .sub(dir.clone().multiplyScalar(distBase + extraDist))
-        .add(new THREE.Vector3(0, heightBase + extraHeight, 0))
-
-      const idealLookAt = carPos.clone().add(new THREE.Vector3(0, 1.0, 0))
+      const idealPos    = carPos.clone().sub(dir.clone().multiplyScalar(dist)).add(new THREE.Vector3(0, height, 0))
+      const idealLookAt = carPos.clone().add(new THREE.Vector3(0, 0.8, 0))
 
       if (!this.initialized) {
         this.currentPos.copy(idealPos)
         this.currentLookAt.copy(idealLookAt)
+        this.camDir.copy(targetDir)
         this.initialized = true
       }
 
-      const posFactor = Math.min(1, dt * 4)
-      const lookFactor = Math.min(1, dt * 8)
-
-      this.currentPos.lerp(idealPos, posFactor)
-      this.currentLookAt.lerp(idealLookAt, lookFactor)
+      this.currentPos.lerp(idealPos, Math.min(1, dt * 4))
+      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 8))
 
     } else if (this.mode === 'cockpit') {
-      const cockpitOffset = new THREE.Vector3(0, 1.2, 0.4)
-      const worldOffset = cockpitOffset.applyQuaternion(
-        new THREE.Quaternion().setFromUnitVectors(
-          new THREE.Vector3(0, 0, 1),
-          carForward
-        )
-      )
-      this.currentPos.copy(carPos).add(worldOffset)
-      this.currentLookAt.copy(carPos).add(carForward.clone().multiplyScalar(10)).add(new THREE.Vector3(0, 1.2, 0))
+      const right = new THREE.Vector3().crossVectors(carUp, carForward).normalize()
+      const rot = new THREE.Matrix4().makeBasis(right, carUp, carForward)
+      const q = new THREE.Quaternion().setFromRotationMatrix(rot)
+      const headOffset = new THREE.Vector3(0, 0.85, 0.65).applyQuaternion(q)
+      this.currentPos.copy(carPos).add(headOffset)
+      this.currentLookAt.copy(carPos)
+        .add(carForward.clone().multiplyScalar(25))
+        .add(new THREE.Vector3(0, 0.75, 0))
 
     } else if (this.mode === 'hood') {
-      const hoodOffset = new THREE.Vector3(0, 1.5, 2.0)
-      const q = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        carForward
-      )
-      this.currentPos.copy(carPos).add(hoodOffset.applyQuaternion(q))
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), carForward)
+      this.currentPos.copy(carPos).add(new THREE.Vector3(0, 1.5, 2.0).applyQuaternion(q))
       this.currentLookAt.copy(carPos)
         .add(carForward.clone().multiplyScalar(20))
         .add(new THREE.Vector3(0, 1.5, 0))
@@ -89,16 +91,10 @@ export class CameraSystem {
     this.camera.lookAt(this.currentLookAt)
   }
 
-  /** Third-person follow camera for on-foot mode */
   updateOnFoot(playerPos: THREE.Vector3, playerForward: THREE.Vector3, dt: number) {
-    const behindDist = 5
-    const height = 2.4
-
-    const idealPos = playerPos
-      .clone()
-      .sub(playerForward.clone().multiplyScalar(behindDist))
-      .add(new THREE.Vector3(0, height, 0))
-
+    const idealPos = playerPos.clone()
+      .sub(playerForward.clone().multiplyScalar(5))
+      .add(new THREE.Vector3(0, 2.4, 0))
     const idealLookAt = playerPos.clone().add(new THREE.Vector3(0, 1.4, 0))
 
     if (!this.initialized) {

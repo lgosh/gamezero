@@ -44,6 +44,7 @@ export class GameEngine {
   private carType: CarType = 'bmw'
 
   private animationId = 0
+  private destroyed = false
   private onHUDUpdate?: (state: HUDState) => void
   private lastHUDState: HUDState = {
     speed: 0, rpm: 800, gear: 1, damage: 0, state: 'loading', carType: 'bmw',
@@ -61,7 +62,7 @@ export class GameEngine {
   // Smoke timer
   private smokeTimer = 0
 
-  init(canvas: HTMLCanvasElement, carType: CarType, onHUDUpdate: (s: HUDState) => void) {
+  async init(canvas: HTMLCanvasElement, carType: CarType, onHUDUpdate: (s: HUDState) => void): Promise<void> {
     this.carType = carType
     this.onHUDUpdate = onHUDUpdate
 
@@ -83,6 +84,25 @@ export class GameEngine {
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(68, canvas.clientWidth / canvas.clientHeight, 0.3, 1200)
 
+    // ─── Environment map — critical for realistic metallic car paint ───────────
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    pmrem.compileEquirectangularShader()
+    const envScene = new THREE.Scene()
+    // Soft studio sky (top bright, sides mid, ground dark)
+    const envSky = new THREE.Mesh(
+      new THREE.SphereGeometry(50, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xdde8f0, side: THREE.BackSide })
+    )
+    envScene.add(envSky)
+    const envGround = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 200),
+      new THREE.MeshBasicMaterial({ color: 0x222222 })
+    )
+    envGround.rotation.x = -Math.PI / 2
+    envScene.add(envGround)
+    this.scene.environment = pmrem.fromScene(envScene, 0.04).texture
+    pmrem.dispose()
+
     // ─── Systems ──────────────────────────────────────────────────────────────
     this.clock = new THREE.Clock()
     this.physicsWorld = new PhysicsWorld()
@@ -99,10 +119,15 @@ export class GameEngine {
     const startPos = new THREE.Vector3(0, 1, 55)
     if (carType === 'bmw') {
       this.car = new BMW(this.scene, this.physicsWorld)
-      ;(this.car as BMW).spawn(startPos)
+      await (this.car as BMW).spawn(startPos)
     } else {
       this.car = new Mercedes(this.scene, this.physicsWorld)
-      ;(this.car as Mercedes).spawn(startPos)
+      await (this.car as Mercedes).spawn(startPos)
+    }
+    // If destroy() was called while the model was loading, abort silently
+    if (this.destroyed) {
+      this.car.dispose()
+      return
     }
 
     // Wire crash sound + camera shake to physics impacts
@@ -118,6 +143,7 @@ export class GameEngine {
   }
 
   start() {
+    if (this.destroyed) return  // user may have navigated away while model was loading
     this.soundSystem.init()
     this.clock.start()
     this.loop()
@@ -203,15 +229,23 @@ export class GameEngine {
     this.soundSystem.updateTire(tireIntensity)
     this.lastSpeedKmh = speedKmh
 
-    // Particles
+    // Particles — 4 exhaust pipes (2 left, 2 right)
     this.smokeTimer += dt
-    if (this.smokeTimer > 0.12) {
+    if (this.smokeTimer > 0.14) {
       this.smokeTimer = 0
-      const exhaustPos = this.car.getPosition()
-        .add(new THREE.Vector3(0, -0.2, -2.5)
-          .applyQuaternion(this.car.group.quaternion))
-      if (input.throttle > 0.8) this.particleSystem.emitDust(exhaustPos, 2)
-      if (this.car.smokeEmitting) this.particleSystem.emitSmoke(exhaustPos, 3)
+      const q = this.car.group.quaternion
+      const carPos = this.car.getPosition()
+      const exhaustOffsets = [
+        new THREE.Vector3(-0.55, -0.20, -2.4),
+        new THREE.Vector3(-0.40, -0.20, -2.4),
+        new THREE.Vector3( 0.40, -0.20, -2.4),
+        new THREE.Vector3( 0.55, -0.20, -2.4),
+      ]
+      for (const off of exhaustOffsets) {
+        const pos = carPos.clone().add(off.clone().applyQuaternion(q))
+        if (input.throttle > 0.8) this.particleSystem.emitExhaust(pos)
+        if (this.car.smokeEmitting) this.particleSystem.emitSmoke(pos, 1)
+      }
     }
     this.particleSystem.update(dt)
 
@@ -219,7 +253,9 @@ export class GameEngine {
     const carPos = this.car.getPosition()
     const carFwd = this.car.getForwardVector()
     const carUp = this.car.getUpVector()
-    this.cameraSystem.update(carPos, carFwd, carUp, speedKmh, dt, input.lookBack)
+    const v = this.car.chassisBody.velocity
+    const carVel = new THREE.Vector3(v.x, v.y, v.z)
+    this.cameraSystem.update(carPos, carFwd, carUp, carVel, speedKmh, dt, input.lookBack)
 
     if (input.cameraToggle) {
       this.cameraModeIndex = (this.cameraModeIndex + 1) % this.CAMERA_MODES.length
@@ -298,6 +334,7 @@ export class GameEngine {
 
   setCameraMode(mode: 'chase' | 'cockpit' | 'hood') {
     this.cameraSystem.setMode(mode)
+    this.cameraModeIndex = this.CAMERA_MODES.indexOf(mode)
   }
 
   setMute(muted: boolean) {
@@ -328,11 +365,12 @@ export class GameEngine {
   }
 
   destroy() {
+    this.destroyed = true
     cancelAnimationFrame(this.animationId)
     window.removeEventListener('resize', this.onResize)
-    this.inputManager.destroy()
-    this.soundSystem.destroy()
-    this.car.dispose()
-    this.renderer.dispose()
+    this.inputManager?.destroy()
+    this.soundSystem?.destroy()
+    this.car?.dispose()
+    this.renderer?.dispose()
   }
 }

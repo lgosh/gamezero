@@ -14,13 +14,19 @@ export class ParticleSystem {
 
   // Pre-created materials for performance
   private smokeMat: THREE.MeshBasicMaterial
+  private exhaustMat: THREE.MeshBasicMaterial
   private sparkMat: THREE.MeshBasicMaterial
   private dustMat: THREE.MeshBasicMaterial
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
     this.smokeMat = new THREE.MeshBasicMaterial({
-      color: 0x888888,
+      color: 0xc8c8c8,
+      transparent: true,
+      depthWrite: false,
+    })
+    this.exhaustMat = new THREE.MeshBasicMaterial({
+      color: 0xd8d8d8,
       transparent: true,
       depthWrite: false,
     })
@@ -34,6 +40,22 @@ export class ParticleSystem {
       transparent: true,
       depthWrite: false,
     })
+  }
+
+  emitExhaust(position: THREE.Vector3) {
+    const mat = this.exhaustMat.clone()
+    mat.opacity = 0.18 + Math.random() * 0.12
+    const size = 0.06 + Math.random() * 0.05
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(size, 4, 4), mat)
+    mesh.position.copy(position)
+    const vel = new THREE.Vector3(
+      (Math.random() - 0.5) * 0.4,
+      0.3 + Math.random() * 0.4,
+      (Math.random() - 0.5) * 0.4
+    )
+    this.scene.add(mesh)
+    const life = 0.6 + Math.random() * 0.4
+    this.particles.push({ mesh, velocity: vel, life, maxLife: life, type: 'smoke' })
   }
 
   emitSmoke(position: THREE.Vector3, count = 4) {
@@ -55,7 +77,7 @@ export class ParticleSystem {
   }
 
   private spawn(type: 'smoke' | 'spark' | 'dust', pos: THREE.Vector3, life: number) {
-    const size = type === 'spark' ? 0.06 : type === 'smoke' ? 0.3 : 0.2
+    const size = type === 'spark' ? 0.06 : type === 'smoke' ? 0.18 : 0.2
     const geo = new THREE.SphereGeometry(size, 4, 4)
     const mat =
       type === 'smoke'
@@ -63,7 +85,7 @@ export class ParticleSystem {
         : type === 'spark'
         ? this.sparkMat.clone()
         : this.dustMat.clone()
-    mat.opacity = 0.9
+    mat.opacity = type === 'smoke' ? 0.55 : 0.9
 
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.copy(pos)

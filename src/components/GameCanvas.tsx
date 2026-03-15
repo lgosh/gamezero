@@ -30,15 +30,14 @@ export default function GameCanvas({ carType, onBack }: GameCanvasProps) {
     const engine = new GameEngine()
     engineRef.current = engine
 
-    try {
-      engine.init(canvas, carType, (state) => {
-        setHudState(state)
-      })
+    engine.init(canvas, carType, (state) => {
+      setHudState(state)
+    }).then(() => {
       setLoading(false)
       engine.start()
-    } catch (err) {
+    }).catch((err) => {
       console.error('GameEngine init failed:', err)
-    }
+    })
 
     return () => {
       engine.destroy()

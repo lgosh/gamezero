@@ -5,6 +5,9 @@
 export class SoundSystem {
   private ctx: AudioContext | null = null
   private masterGain!: GainNode
+  // muteNode sits between masterGain and ctx.destination.
+  // It is the ONLY node whose gain setMute() touches — nothing else ever modifies it.
+  private muteNode!: GainNode
 
   // Engine
   private engOsc1!: OscillatorNode
@@ -18,6 +21,7 @@ export class SoundSystem {
   // Tire squeal
   private tireBuffer: AudioBuffer | null = null
   private tireSource: AudioBufferSourceNode | null = null
+  private tireDistortion!: WaveShaperNode  // saved so sources can reconnect
   private tireFilter!: BiquadFilterNode
   private tireFilter2!: BiquadFilterNode
   private tireGain!: GainNode
@@ -31,9 +35,12 @@ export class SoundSystem {
   // Ambient city
   private cityBuffer: AudioBuffer | null = null
   private citySource: AudioBufferSourceNode | null = null
+  private cityFilter!: BiquadFilterNode  // saved so sources can reconnect
   private cityGain!: GainNode
 
   private started = false
+  private muteFlag = false
+  private pauseFlag = false
 
   /** Must be called after a user gesture (click/keypress) */
   init() {
@@ -45,7 +52,13 @@ export class SoundSystem {
 
     this.masterGain = ctx.createGain()
     this.masterGain.gain.value = 1
-    this.masterGain.connect(ctx.destination)
+
+    // Dedicated mute node — only setMute() ever changes its gain
+    this.muteNode = ctx.createGain()
+    this.muteNode.gain.value = this.muteFlag ? 0 : 1
+
+    this.masterGain.connect(this.muteNode)
+    this.muteNode.connect(ctx.destination)
 
     this.setupEngine(ctx)
     this.setupTire(ctx)
@@ -128,9 +141,10 @@ export class SoundSystem {
     this.tireBuffer = this.createNoiseBuffer(ctx, 2)
 
     // Distortion turns white noise into gritty, harmonically-rich friction sound
-    const dist = ctx.createWaveShaper()
-    dist.curve = this.makeDistortionCurve(200)
-    dist.oversample = '2x'
+    this.tireDistortion = ctx.createWaveShaper()
+    this.tireDistortion.curve = this.makeDistortionCurve(200)
+    this.tireDistortion.oversample = '2x'
+    const dist = this.tireDistortion
 
     // Lower band: the thick "screech" body (~1400 Hz)
     this.tireFilter = ctx.createBiquadFilter()
@@ -212,20 +226,20 @@ export class SoundSystem {
     // Distant city hum — low drone + occasional peaks
     this.cityBuffer = this.createNoiseBuffer(ctx, 4)
 
-    const filter = ctx.createBiquadFilter()
-    filter.type = 'lowpass'
-    filter.frequency.value = 300
+    this.cityFilter = ctx.createBiquadFilter()
+    this.cityFilter.type = 'lowpass'
+    this.cityFilter.frequency.value = 300
 
     this.cityGain = ctx.createGain()
     this.cityGain.gain.value = 0.04
 
-    filter.connect(this.cityGain)
+    this.cityFilter.connect(this.cityGain)
     this.cityGain.connect(this.masterGain)
 
     const src = ctx.createBufferSource()
     src.buffer = this.cityBuffer
     src.loop = true
-    src.connect(filter)
+    src.connect(this.cityFilter)
     src.start()
     this.citySource = src
   }
@@ -379,16 +393,14 @@ export class SoundSystem {
 
   /** Suspend all audio instantly (pause) */
   pauseAll() {
-    if (this.ctx && this.ctx.state === 'running') {
-      this.ctx.suspend()
-    }
+    this.pauseFlag = true
+    if (this.ctx?.state === 'running') this.ctx.suspend()
   }
 
-  /** Resume all audio (unpause) */
+  /** Resume all audio (unpause) — only actually resumes if not muted */
   resumeAll() {
-    if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume()
-    }
+    this.pauseFlag = false
+    if (!this.muteFlag && this.ctx?.state === 'suspended') this.ctx.resume()
   }
 
   /** Fade engine and tire sounds to silence (call on crash/destroy) */
@@ -453,11 +465,62 @@ export class SoundSystem {
   }
 
   setMute(muted: boolean) {
+    this.muteFlag = muted
     if (!this.ctx) return
-    this.masterGain.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.05)
+
+    if (muted) {
+      // Physically sever the wire from the audio graph to the speakers.
+      // No gain value, no suspend — just remove the connection entirely.
+      try { this.muteNode.disconnect(this.ctx.destination) } catch { /* already disconnected */ }
+      // Also stop all looping buffer sources — they produce 0 signal when stopped
+      try { this.citySource?.stop();  this.citySource = null } catch { /* already stopped */ }
+      try { this.windSource?.stop();  this.windSource = null } catch { /* already stopped */ }
+      try { this.tireSource?.stop();  this.tireSource = null } catch { /* already stopped */ }
+    } else {
+      // Rewire the graph to destination and restart the noise sources
+      try { this.muteNode.connect(this.ctx.destination) } catch { /* already connected */ }
+      // Resume context if it was suspended by pause (and pause is now lifted)
+      if (!this.pauseFlag && this.ctx.state === 'suspended') this.ctx.resume()
+      this.restartNoiseSources(this.ctx)
+    }
+  }
+
+  private restartNoiseSources(ctx: AudioContext) {
+    if (this.cityBuffer && !this.citySource) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.cityBuffer
+      src.loop = true
+      src.connect(this.cityFilter)
+      src.start()
+      this.citySource = src
+    }
+    if (this.windBuffer && !this.windSource) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.windBuffer
+      src.loop = true
+      src.connect(this.windFilter)
+      src.start()
+      this.windSource = src
+    }
+    if (this.tireBuffer && !this.tireSource) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.tireBuffer
+      src.loop = true
+      src.connect(this.tireDistortion)
+      src.start()
+      this.tireSource = src
+    }
   }
 
   destroy() {
+    // Explicitly stop all looping sources so they don't outlive the context close
+    try { this.citySource?.stop() } catch { /* already stopped */ }
+    try { this.windSource?.stop() } catch { /* already stopped */ }
+    try { this.tireSource?.stop() } catch { /* already stopped */ }
+    try { this.engOsc1?.stop() } catch { /* already stopped */ }
+    try { this.engOsc2?.stop() } catch { /* already stopped */ }
+    try { this.engOsc3?.stop() } catch { /* already stopped */ }
     this.ctx?.close()
+    this.started = false
   }
 }
