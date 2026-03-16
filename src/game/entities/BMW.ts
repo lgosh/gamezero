@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { Car } from './Car'
 import type { PhysicsWorld } from '../PhysicsWorld'
-import { loadCarModel, extractWheels } from './ModelLoader'
+import { loadCarModel, extractWheels, mergeBodyGeometry } from './ModelLoader'
 
 /** BMW M5 E34 — loaded from /models/bmw_m5_e34.glb */
 export class BMW extends Car {
@@ -42,8 +42,9 @@ export class BMW extends Car {
     // targetLength 4.95 matches Mercedes visual size
     const { bodyGroup } = await loadCarModel('/models/bmw_m5_e34.glb', 4.95)
 
-    const { groups, positions } = extractWheels(bodyGroup, this.scene)
+    const { groups, positions } = extractWheels(bodyGroup, this.scene, 'bmw_e34')
     this.wheelMeshes = groups
+    mergeBodyGeometry(bodyGroup)
 
     this.registerDamageZone(bodyGroup, 'front', 0.35)
     this.registerDamageZone(bodyGroup, 'rear', 0.30)

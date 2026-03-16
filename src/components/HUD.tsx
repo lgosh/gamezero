@@ -11,6 +11,37 @@ interface HUDProps {
   muted: boolean
 }
 
+function FPSCounter() {
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    let last = performance.now()
+    let frames = 0
+    let raf: number
+    const tick = (now: number) => {
+      frames++
+      if (now - last >= 500) {
+        const fps = Math.round(frames * 1000 / (now - last))
+        if (ref.current) {
+          ref.current.textContent = `${fps} FPS`
+          ref.current.style.color = fps >= 50 ? '#4ade80' : fps >= 30 ? '#facc15' : '#f87171'
+        }
+        frames = 0
+        last = now
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <span
+      ref={ref}
+      className="font-mono text-xs"
+      style={{ textShadow: '0 1px 3px #000' }}
+    />
+  )
+}
+
 function Minimap({ playerPos, playerHeading, minimapCanvas }: {
   playerPos?: { x: number; z: number }
   playerHeading?: number
@@ -267,12 +298,15 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
       {/* ── Top-left: Car name ────────────────────────────────────────────────── */}
       <div className="absolute top-6 left-6 pointer-events-none">
         <div className="hud-panel px-4 py-2 flex flex-col gap-0.5">
-          <div className="text-white/90 font-bold text-sm tracking-wider uppercase">
-            {state.onFoot ? '👟 On Foot' :
-              state.carType === 'bmw' ? '🚗 BMW M5 E34' : 
-              state.carType === 'bmwcs' ? '🚗 BMW M5 CS' : 
-              state.carType === 'toyota' ? '🚗 Toyota RAV4 Hybrid' : 
-              '🚗 Mercedes-AMG E63 S'}
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-white/90 font-bold text-sm tracking-wider uppercase">
+              {state.onFoot ? '👟 On Foot' :
+                state.carType === 'bmw' ? '🚗 BMW M5 E34' :
+                state.carType === 'bmwcs' ? '🚗 BMW M5 CS' :
+                state.carType === 'toyota' ? '🚗 Toyota RAV4 Hybrid' :
+                '🚗 Mercedes-AMG E63 S'}
+            </div>
+            <FPSCounter />
           </div>
           <div className="text-white/45 text-[11px] font-mono">
             📍 Freedom Square · Tbilisi

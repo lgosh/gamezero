@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import * as CANNON from 'cannon-es'
 
 export interface LoadedCarModel {
@@ -128,7 +129,7 @@ function findCarCluster(root: THREE.Group): THREE.Box3 | null {
  * 2. Position-based fallback — finds small meshes at the 4 bottom corners of the car.
  * After extraction, each wheel group's geometry is re-centered to prevent orbit.
  */
-export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene): { groups: THREE.Group[], positions: CANNON.Vec3[] } {
+export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene, modelName = 'unknown'): { groups: THREE.Group[], positions: CANNON.Vec3[] } {
   bodyGroup.updateWorldMatrix(true, true)
 
   // ── Collect every mesh with its world-space bounding box ─────────────
@@ -168,6 +169,24 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
     // Only consider meshes in the lower half of the car (where wheels live)
     const lowParts = allMeshInfo.filter(p => p.center.y < carCenter.y)
     final4 = clusterAndPick4(lowParts)
+
+    // Reject if the 4 clusters are not spatially distinct — this means the
+    // position-based fallback found geometry stacked near the model origin
+    // (e.g. Toyota GLB where wheel assemblies have no local transforms and
+    // all share the same world-space center). Using such positions as
+    // chassisConnectionPointLocal would break physics entirely.
+    if (final4) {
+      let allDistinct = true
+      for (let i = 0; i < 4 && allDistinct; i++) {
+        for (let j = i + 1; j < 4 && allDistinct; j++) {
+          if (final4[i].center.distanceTo(final4[j].center) < 0.4) allDistinct = false
+        }
+      }
+      if (!allDistinct) {
+        console.warn('[ModelLoader] Position-based wheel clusters are not spatially distinct — skipping, will use cfg.wheelPositions')
+        final4 = null
+      }
+    }
   }
 
   if (!final4) {
@@ -188,14 +207,30 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
   const picked = new Set(final4.flatMap(c => c.meshes))
   for (const info of allMeshInfo) {
     if (picked.has(info.mesh)) continue
-    if (!isWheelNode(info.mesh)) continue  // ← only wheel-named parts
+    // Wheel-named parts can join clusters within 0.55m.
+    // Unnamed parts (e.g. tire meshes with generic names) can only join if
+    // essentially concentric with a cluster (< 0.10m) — this picks up tires
+    // that share the same world-space center as a detected rim/caliper without
+    // accidentally pulling in nearby body panels or suspension parts.
+    const threshold = isWheelNode(info.mesh) ? 0.55 : 0.25
     for (const cluster of final4) {
-      if (info.center.distanceTo(cluster.center) < 0.55) {
+      if (info.center.distanceTo(cluster.center) < threshold) {
         cluster.meshes.push(info.mesh)
         picked.add(info.mesh)
         break
       }
     }
+  }
+
+  // ── Validate that extraction looks like real wheel geometry ─────────
+  // If fewer than 2 of the 4 clusters contain a wheel-named mesh, the
+  // extraction is unreliable (e.g. a rigged model where wheel geometry sits
+  // at origin and Strategy 2 grabbed random corner body parts instead).
+  // Return empty so physics falls back to cfg.wheelPositions.
+  const clustersWithWheelParts = final4.filter(c => c.meshes.some(m => isWheelNode(m))).length
+  if (clustersWithWheelParts < 2) {
+    console.warn(`[ModelLoader] Only ${clustersWithWheelParts}/4 clusters contain wheel-named parts — extraction unreliable, skipping`)
+    return { groups: [], positions: [] }
   }
 
   // ── Build wheel groups with proper centering ────────────────────────
@@ -307,4 +342,53 @@ function clusterAndPick4(
 
 export function extractWheelsByKeyword(bodyGroup: THREE.Group, targetScene: THREE.Scene): THREE.Group[] {
   return extractWheels(bodyGroup, targetScene).groups
+}
+
+/**
+ * Merge all remaining body meshes in bodyGroup by material to dramatically
+ * reduce draw calls (e.g. 1800 meshes → ~20 merged meshes, one per material).
+ * Call this after extractWheels so wheel meshes are already separated out.
+ */
+export function mergeBodyGeometry(bodyGroup: THREE.Group): void {
+  bodyGroup.updateWorldMatrix(true, true)
+
+  type Bucket = { mat: THREE.Material; geoms: THREE.BufferGeometry[]; castShadow: boolean }
+  const buckets = new Map<string, Bucket>()
+  const toRemove: THREE.Mesh[] = []
+
+  bodyGroup.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh.isMesh) return
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    if (mats.length > 1) return // skip multi-material meshes
+
+    const mat = mats[0]
+    if (!mat) return
+
+    mesh.updateWorldMatrix(true, false)
+    const geom = mesh.geometry.clone()
+    geom.applyMatrix4(mesh.matrixWorld)
+
+    // Key by material + attribute set so only compatible geometries merge
+    const attrSig = Object.keys(mesh.geometry.attributes).sort().join(',')
+    const key = `${mat.uuid}|${attrSig}`
+    if (!buckets.has(key)) buckets.set(key, { mat, geoms: [], castShadow: false })
+    const b = buckets.get(key)!
+    b.geoms.push(geom)
+    if (mesh.castShadow) b.castShadow = true
+    toRemove.push(mesh)
+  })
+
+  toRemove.forEach((m) => m.parent?.remove(m))
+
+  for (const { mat, geoms, castShadow } of buckets.values()) {
+    if (geoms.length === 0) continue
+    let merged: THREE.BufferGeometry | null = null
+    try { merged = mergeGeometries(geoms) } catch { merged = geoms[0] }
+    if (!merged) continue
+    const m = new THREE.Mesh(merged, mat)
+    m.castShadow = castShadow
+    m.receiveShadow = true
+    bodyGroup.add(m)
+  }
 }

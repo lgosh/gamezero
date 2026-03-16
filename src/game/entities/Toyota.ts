@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { Car } from './Car'
 import type { PhysicsWorld } from '../PhysicsWorld'
-import { loadCarModel, extractWheels } from './ModelLoader'
+import { loadCarModel, extractWheels, mergeBodyGeometry } from './ModelLoader'
 
 /** 2023 Toyota RAV4 Hybrid — loaded from /models/toyota.glb */
 export class Toyota extends Car {
@@ -41,8 +41,9 @@ export class Toyota extends Car {
   private async loadBody(): Promise<CANNON.Vec3[]> {
     const { bodyGroup } = await loadCarModel('/models/toyota.glb', 4.60)
 
-    const { groups, positions } = extractWheels(bodyGroup, this.scene)
+    const { groups, positions } = extractWheels(bodyGroup, this.scene, 'toyota')
     this.wheelMeshes = groups
+    mergeBodyGeometry(bodyGroup)
 
     this.registerDamageZone(bodyGroup, 'front', 0.35)
     this.registerDamageZone(bodyGroup, 'rear', 0.30)
