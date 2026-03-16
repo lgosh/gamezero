@@ -31,6 +31,7 @@ export interface HUDState {
   onFoot?: boolean
   playerPos?: { x: number; z: number }
   playerHeading?: number
+  minimapCanvas?: HTMLCanvasElement
 }
 
 export class GameEngine {
@@ -52,6 +53,13 @@ export class GameEngine {
   private mercedesCar!: Car // stable reference — never swaps
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
+
+  // Spawn anchor — set during init, reused by resetCar/respawn
+  private spawnCx = -90
+  private spawnCz = 0
+  private spawnHeading = 0
+  private bmwSpawnPos  = new THREE.Vector3(-85, 2.0, -5)
+  private merSpawnPos  = new THREE.Vector3(-85, 2.0,  5)
 
   private state: GameState = 'loading'
   private carType: CarType = 'bmw'
@@ -165,10 +173,22 @@ export class GameEngine {
     this.map = new OSMMap(this.scene, this.physicsWorld)
     await this.map.build()
 
-    // ─── Cars — spawned on the west road of Freedom Square (Shalva Dadiani) ──
-    // Roads begin at ~90 m from the monument; x≈-85 keeps us clear of building physics
-    const mercedesPos = new THREE.Vector3(-90, 2.0,  8)
-    const bmwPos      = new THREE.Vector3(-90, 2.0, -8)
+    // ─── Cars — spawned in front of Old Town Hall, side by side, facing the monument ──
+    const monX = -137, monZ = -136
+    const townhall = this.map.getLandmark('townhall')
+    const base = townhall ?? { cx: -90, cz: 0 }
+    const toMonDx = monX - base.cx, toMonDz = monZ - base.cz
+    const toMonLen = Math.sqrt(toMonDx * toMonDx + toMonDz * toMonDz) || 1
+    const toMonNx = toMonDx / toMonLen, toMonNz = toMonDz / toMonLen
+    const perpX = -toMonNz, perpZ = toMonNx
+    // Offset 50m toward monument — clear of the building, on the street outside
+    this.spawnCx = base.cx + toMonNx * 50
+    this.spawnCz = base.cz + toMonNz * 50
+    this.spawnHeading = Math.atan2(monX - this.spawnCx, monZ - this.spawnCz)
+    this.bmwSpawnPos  = new THREE.Vector3(this.spawnCx + perpX * 5, 2.0, this.spawnCz + perpZ * 5)
+    this.merSpawnPos  = new THREE.Vector3(this.spawnCx - perpX * 5, 2.0, this.spawnCz - perpZ * 5)
+    const bmwPos      = this.bmwSpawnPos.clone()
+    const mercedesPos = this.merSpawnPos.clone()
 
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
     const bmw      = new BMW(this.scene, this.physicsWorld)
@@ -198,24 +218,22 @@ export class GameEngine {
     wireImpact(mercedes)
     wireImpact(bmw)
 
-    // Orient both cars to face the Freedom Monument at (-137, -136)
-    // from spawn x=-90: heading = atan2(dx, dz) where +Z is "forward 0"
-    const monX = -137, monZ = -136
-    const facingHeading = (spawnZ: number) =>
-      Math.atan2(monX - (-90), monZ - spawnZ)
-    const setFacing = (body: typeof bmw.chassisBody, spawnZ: number) => {
-      const h = facingHeading(spawnZ)
+    // Orient both cars to face the Freedom Monument
+    const facingHeading = (pos: THREE.Vector3) =>
+      Math.atan2(monX - pos.x, monZ - pos.z)
+    const setFacing = (body: typeof bmw.chassisBody, pos: THREE.Vector3) => {
+      const h = facingHeading(pos)
       body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
       body.previousQuaternion.copy(body.quaternion)
     }
-    setFacing(bmw.chassisBody,      bmwPos.z)
-    setFacing(mercedes.chassisBody, mercedesPos.z)
+    setFacing(bmw.chassisBody,      bmwPos)
+    setFacing(mercedes.chassisBody, mercedesPos)
 
     // Both cars parked at start — player spawns on foot between them to choose
     this.car.chassisBody.sleep()
     this.parkedCar.chassisBody.sleep()
-    const playerStart = new THREE.Vector3(-90, 1.0, 0)
-    this.player = new Player(this.scene, this.physicsWorld, playerStart, 0)
+    const playerStart = new THREE.Vector3(this.spawnCx, 1.0, this.spawnCz)
+    this.player = new Player(this.scene, this.physicsWorld, playerStart, this.spawnHeading)
     this.gameMode = 'onfoot'
 
     // ─── Resize ───────────────────────────────────────────────────────────────
@@ -380,6 +398,7 @@ export class GameEngine {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
         state: this.state, carType: this.car instanceof BMW ? 'bmw' : 'mercedes', onFoot: true,
         playerPos: currentPlayerPos, playerHeading: currentHeading,
+        minimapCanvas: this.map.minimapCanvas ?? undefined,
       }
       this.onHUDUpdate?.(this.lastHUDState)
 
@@ -485,6 +504,7 @@ export class GameEngine {
       onFoot: false,
       playerPos: currentPlayerPos,
       playerHeading: currentHeading,
+      minimapCanvas: this.map.minimapCanvas ?? undefined,
     }
     this.onHUDUpdate?.(this.lastHUDState)
 
@@ -577,23 +597,38 @@ export class GameEngine {
   }
 
   resetCar() {
-    // Dispose player if on foot
-    if (this.player) {
-      this.player.dispose()
-      this.player = null
-    }
-    this.gameMode = 'driving'
+    // Reset both cars to their original side-by-side positions in front of Old Town Hall
+    this.bmwCar.reset(this.bmwSpawnPos.clone())
+    this.mercedesCar.reset(this.merSpawnPos.clone())
 
-    const startPos = new THREE.Vector3(-90, 2.0, 0)
-    this.car.reset(startPos)
+    // Orient cars toward monument
+    const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
+      const h = Math.atan2(-137 - pos.x, -136 - pos.z)
+      body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
+      body.previousQuaternion.copy(body.quaternion)
+    }
+    setQ(this.bmwCar.chassisBody,      this.bmwSpawnPos)
+    setQ(this.mercedesCar.chassisBody, this.merSpawnPos)
+
+    this.bmwCar.damage      = 0
+    this.mercedesCar.damage = 0
     this.smoothCarYInit = false
-    this.car.chassisBody.wakeUp()
-    this.car.setHeadlights(true)
+
+    // Respawn player on foot between the cars, facing monument
+    if (this.player) { this.player.dispose(); this.player = null }
+    const playerStart = new THREE.Vector3(this.spawnCx, 1.0, this.spawnCz)
+    this.player = new Player(this.scene, this.physicsWorld, playerStart, this.spawnHeading)
+    this.gameMode = 'onfoot'
+
+    // Park both cars
+    this.bmwCar.chassisBody.sleep()
+    this.mercedesCar.chassisBody.sleep()
+
     this.cameraSystem.reset()
     this.state = 'playing'
     this.clock.start()
     this.soundSystem.resumeAll()
-    this.onHUDUpdate?.({ ...this.lastHUDState, state: 'playing', damage: 0, onFoot: false })
+    this.onHUDUpdate?.({ ...this.lastHUDState, state: 'playing', damage: 0, onFoot: true })
   }
 
   setCameraMode(mode: 'chase' | 'cockpit' | 'hood') {

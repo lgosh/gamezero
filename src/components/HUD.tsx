@@ -11,7 +11,11 @@ interface HUDProps {
   muted: boolean
 }
 
-function Minimap({ playerPos, playerHeading }: { playerPos?: { x: number; z: number }; playerHeading?: number }) {
+function Minimap({ playerPos, playerHeading, minimapCanvas }: {
+  playerPos?: { x: number; z: number }
+  playerHeading?: number
+  minimapCanvas?: HTMLCanvasElement
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -20,89 +24,66 @@ function Minimap({ playerPos, playerHeading }: { playerPos?: { x: number; z: num
     const ctx = canvas.getContext('2d')!
     const W = canvas.width
     const H = canvas.height
-    
+
     ctx.clearRect(0, 0, W, H)
-    
-    // Circular background (GTA style)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+
+    // Circular background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
     ctx.beginPath()
     ctx.arc(W/2, H/2, W/2 - 2, 0, Math.PI * 2)
     ctx.fill()
-    ctx.strokeStyle = '#ffffff'
-    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'
+    ctx.lineWidth = 2
     ctx.stroke()
 
+    // Clip to circle
     ctx.save()
-    ctx.translate(W/2, H/2)
-    // GTA Style Rotation: Map rotates to compensate for player heading.
-    // Standard rotation: ctx.rotate(playerHeading) works with x = -relX, y = -relZ.
-    ctx.rotate(playerHeading || 0)
-
-    const scale = 0.6 
-    const worldToMap = (wx: number, wz: number) => ({
-      x: -(wx - playerPos.x) * scale,
-      y: -(wz - playerPos.z) * scale 
-    })
-
-    // Clipping path for the circular radar
     ctx.beginPath()
-    ctx.arc(0, 0, W/2 - 4, 0, Math.PI * 2)
+    ctx.arc(W/2, H/2, W/2 - 3, 0, Math.PI * 2)
     ctx.clip()
 
-    // Draw Roads (Simplified radial layout)
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
-    ctx.lineCap = 'round'
+    if (minimapCanvas) {
+      // ── Real OSM minimap ────────────────────────────────────────────────
+      // MAP_RANGE=900, MAP_SIZE=512 → mapScale px/m
+      const MAP_RANGE = 900, MAP_SIZE = 512
+      const mapScale = MAP_SIZE / (2 * MAP_RANGE)   // ≈ 0.2844 px/m
 
-    const drawRoad = (angle: number, length: number, width: number, startX = 0, startZ = 0) => {
-      const p1 = worldToMap(startX, startZ)
-      const p2 = {
-        x: p1.x - Math.sin(angle) * length * scale,
-        y: p1.y - Math.cos(angle) * length * scale 
-      }
-      ctx.lineWidth = width * scale
-      ctx.beginPath()
-      ctx.moveTo(p1.x, p1.y)
-      ctx.lineTo(p2.x, p2.y)
-      ctx.stroke()
+      // Player centre in map-canvas pixels
+      const pcx = (playerPos.x + MAP_RANGE) * mapScale
+      const pcz = (playerPos.z + MAP_RANGE) * mapScale
+
+      // We want VIEW_RADIUS meters to fill W/2 display pixels
+      const VIEW_RADIUS = 200  // meters visible to each side
+      const drawScale   = (W / 2) / (VIEW_RADIUS * mapScale)
+
+      ctx.translate(W/2, H/2)
+      // heading = atan2(fwd.x, fwd.z); north(-Z)=π, south(+Z)=0, east(+X)=π/2
+      // We need map rotation = heading - π so the player's facing direction points UP
+      ctx.rotate((playerHeading ?? 0) - Math.PI)
+      ctx.scale(drawScale, drawScale)
+      ctx.drawImage(minimapCanvas, -pcx, -pcz)
     }
-
-    // Central Square Roundabout
-    ctx.lineWidth = 40 * scale
-    ctx.beginPath()
-    const rPos = worldToMap(0, 0)
-    ctx.arc(rPos.x, rPos.y, 32 * scale, 0, Math.PI * 2)
-    ctx.stroke()
-
-    // 6 Radiating Streets (Angles match fixed TbilisiMap.ts)
-    drawRoad(-Math.PI * 0.75, 600, 36) // Rustaveli (NW)
-    drawRoad(Math.PI * 0.75, 600, 28)  // Pushkin (NE)
-    drawRoad(Math.PI * 0.25, 600, 24)  // Kote Apkhazi (SE)
-    drawRoad(0, 400, 22)               // Dadiani (S)
-    drawRoad(-Math.PI * 0.25, 400, 24) // Leonidze (SW)
-    drawRoad(-Math.PI * 0.1, 300, 20)  // Tabidze (SSW)
 
     ctx.restore()
 
-    // Fixed Player marker in center of radar
+    // Player marker — white triangle pointing up, always at center
     ctx.save()
     ctx.translate(W/2, H/2)
-    
-    // Triangle pointing UP (GTA style)
     ctx.fillStyle = '#ffffff'
     ctx.strokeStyle = '#000000'
-    ctx.lineWidth = 1
+    ctx.lineWidth = 1.5
     ctx.shadowBlur = 4
     ctx.shadowColor = '#000000'
     ctx.beginPath()
-    ctx.moveTo(0, -12) // Pointy end
-    ctx.lineTo(8, 10)
-    ctx.lineTo(-8, 10)
+    ctx.moveTo(0, -10)
+    ctx.lineTo(7, 8)
+    ctx.lineTo(-7, 8)
     ctx.closePath()
     ctx.fill()
     ctx.stroke()
     ctx.restore()
 
-  }, [playerPos, playerHeading])
+  }, [playerPos, playerHeading, minimapCanvas])
 
   return <canvas ref={canvasRef} width={160} height={160} className="shadow-2xl" style={{ borderRadius: '50%' }} />
 }
@@ -326,7 +307,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
 
       {/* ── Bottom-left: Minimap & Controls hint ─────────────────────────────── */}
       <div className="absolute bottom-6 left-6 pointer-events-none flex flex-col gap-4">
-        <Minimap playerPos={state.playerPos} playerHeading={state.playerHeading} />
+        <Minimap playerPos={state.playerPos} playerHeading={state.playerHeading} minimapCanvas={state.minimapCanvas} />
         {state.onFoot ? (
           <div className="hud-panel px-3 py-2 text-[11px] text-white/35 font-mono leading-5">
             <div>W / ↑ — Walk forward</div>
@@ -335,7 +316,8 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div>Space — Sprint</div>
             <div>Shift — Jump</div>
             <div>F — Enter car</div>
-            <div className="border-t border-white/10 mt-1 pt-1 text-white/50">P / ESC — Pause</div>
+            <div className="border-t border-white/10 mt-1 pt-1">T — Chat</div>
+            <div className="text-white/50">P / ESC — Pause</div>
           </div>
         ) : (
           <div className="hud-panel px-3 py-2 text-[11px] text-white/35 font-mono leading-5">
@@ -345,7 +327,8 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div>Space — Handbrake</div>
             <div>H — Horn &nbsp; B — Look back</div>
             <div>C — Camera &nbsp; F — Exit car</div>
-            <div className="border-t border-white/10 mt-1 pt-1 text-white/50">P / ESC — Pause</div>
+            <div className="border-t border-white/10 mt-1 pt-1">T — Chat</div>
+            <div className="text-white/50">P / ESC — Pause</div>
           </div>
         )}
       </div>

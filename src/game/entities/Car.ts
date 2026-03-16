@@ -43,6 +43,9 @@ export class Car {
   vehicle!: CANNON.RaycastVehicle
   chassisBody!: CANNON.Body
 
+  // Set false to disable all damage (walls, crashes, etc.)
+  static damageEnabled = false
+
   // State
   speedKmh = 0
   rpm = 800
@@ -195,6 +198,7 @@ export class Car {
   }
 
   applyDamage(amount: number, zone: DamageZone['zone']) {
+    if (!Car.damageEnabled) return
     this.damage = Math.min(1, this.damage + amount)
     this.deformZone(zone, amount)
 
