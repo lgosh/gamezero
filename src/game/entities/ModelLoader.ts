@@ -5,7 +5,7 @@ import * as CANNON from 'cannon-es'
 export interface LoadedCarModel {
   bodyGroup: THREE.Group
   wheelGroups: THREE.Group[]
-  wheelPositions: CANNON.Vec3[] 
+  wheelPositions: CANNON.Vec3[]
 }
 
 const loader = new GLTFLoader()
@@ -38,7 +38,13 @@ export async function loadCarModel(
       const sm = m as THREE.MeshStandardMaterial
       if (sm.isMeshStandardMaterial) {
         sm.envMapIntensity = 0.5
-        if (sm.transparent && sm.opacity < 0.8) sm.depthWrite = false
+        
+        // Disable depth write for simple transparency to prevent sorting glitches,
+        // BUT never do this for PBR transmission materials (they need depth buffer).
+        const isTransmissionGlass = (m as any).isMeshPhysicalMaterial && (m as any).transmission > 0
+        if (sm.transparent && sm.opacity < 0.8 && !isTransmissionGlass) {
+          sm.depthWrite = false
+        }
       }
     }
   })
@@ -67,7 +73,7 @@ export async function loadCarModel(
 
   if (options?.targetWidth !== undefined) {
     const scaleXY = options.targetWidth / size0.x
-    const scaleZ  = targetLength / size0.z
+    const scaleZ = targetLength / size0.z
     root.scale.set(scaleXY, scaleXY, scaleZ)
   } else {
     const longestSide = Math.max(size0.x, size0.y, size0.z)
@@ -138,11 +144,12 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
   })
 
   // ── Strategy 1: name-based detection ─────────────────────────────────
+  // Includes Italian terms (freni = brake, pinza = caliper) for Sketchfab models
   const isWheelNode = (node: THREE.Object3D): boolean => {
     let curr: THREE.Object3D | null = node
     while (curr && curr !== bodyGroup) {
       const name = curr.name.toLowerCase()
-      if (name.match(/wheel|tire|tyre|rim|hub|disc|brake|rotor|caliper|axle|rad/)) return true
+      if (name.match(/wheel|tire|tyre|rim|hub|disc|brake|rotor|caliper|axle|rad|freni|pinza/)) return true
       curr = curr.parent
     }
     return false
@@ -170,10 +177,18 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
     return { groups: [], positions: [] }
   }
 
-  // ── Pull in nearby meshes not yet picked (rims, calipers, etc.) ─────
+  // Remember which meshes are "core" wheel parts (name-detected) — only
+  // these will be used for computing the wheel rotation pivot below.
+  const coreMeshSets = final4.map(c => new Set(c.meshes))
+
+  // ── Pull in nearby wheel-named meshes not yet picked ────────────────
+  // IMPORTANT: Only pull in meshes that pass isWheelNode. Non-wheel body
+  // parts (suspension, fender liners, etc.) near the wheels must stay on
+  // the body — otherwise they orbit with the wheel and corrupt the center.
   const picked = new Set(final4.flatMap(c => c.meshes))
   for (const info of allMeshInfo) {
     if (picked.has(info.mesh)) continue
+    if (!isWheelNode(info.mesh)) continue  // ← only wheel-named parts
     for (const cluster of final4) {
       if (info.center.distanceTo(cluster.center) < 0.55) {
         cluster.meshes.push(info.mesh)
@@ -187,17 +202,33 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
   const groups: THREE.Group[] = []
   const positions: CANNON.Vec3[] = []
 
-  for (const cluster of final4) {
-    // Recalculate center from ALL meshes in the cluster (including second-pass)
+  for (let ci = 0; ci < final4.length; ci++) {
+    const cluster = final4[ci]
+    const coreSet = coreMeshSets[ci]
+
+    // Compute the rotation pivot from ONLY the core name-detected meshes.
+    // Pulled-in extras (calipers, etc.) are included visually but must not
+    // shift the pivot — they sit at different depths along the axle axis.
     const cbox = new THREE.Box3()
-    cluster.meshes.forEach(m => cbox.expandByObject(m))
+    cluster.meshes.forEach(m => {
+      if (coreSet.has(m)) cbox.expandByObject(m)
+    })
+    // Fallback: if cbox is empty (shouldn't happen), use all meshes
+    if (cbox.isEmpty()) cluster.meshes.forEach(m => cbox.expandByObject(m))
     const trueCenter = cbox.getCenter(new THREE.Vector3())
 
-    const group = new THREE.Group()
-    cluster.meshes.forEach(m => {
+    // Snapshot world matrices BEFORE detaching anything — parent/child
+    // relations inside the cluster mean removing mesh A invalidates
+    // the matrixWorld of its child mesh B, causing wobble / orbit.
+    const savedMatrices = cluster.meshes.map(m => {
       m.updateWorldMatrix(true, false)
+      return m.matrixWorld.clone()
+    })
+
+    const group = new THREE.Group()
+    cluster.meshes.forEach((m, idx) => {
       const geom = m.geometry.clone()
-      geom.applyMatrix4(m.matrixWorld)
+      geom.applyMatrix4(savedMatrices[idx])
       geom.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z)
       m.geometry = geom
       m.parent?.remove(m)
@@ -215,7 +246,7 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
       if (drift.length() > 0.001) {
         group.traverse(o => {
           if ((o as THREE.Mesh).isMesh) {
-            ;(o as THREE.Mesh).geometry.translate(-drift.x, -drift.y, -drift.z)
+            ; (o as THREE.Mesh).geometry.translate(-drift.x, -drift.y, -drift.z)
           }
         })
         trueCenter.add(drift)
@@ -270,7 +301,7 @@ function clusterAndPick4(
   // Sort: higher Z = front, lower X = left → [FL, FR, RL, RR]
   const ordered = top4.sort((a, b) => b.center.z - a.center.z)
   const front = ordered.slice(0, 2).sort((a, b) => a.center.x - b.center.x)
-  const rear  = ordered.slice(2, 4).sort((a, b) => a.center.x - b.center.x)
+  const rear = ordered.slice(2, 4).sort((a, b) => a.center.x - b.center.x)
   return [...front, ...rear]
 }
 

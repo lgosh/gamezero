@@ -122,8 +122,8 @@ export class Car {
     }
 
     // Use detected positions if available, otherwise fallback to config
-    const positions = (detectedWheelPositions && detectedWheelPositions.length === 4) 
-      ? detectedWheelPositions 
+    const positions = (detectedWheelPositions && detectedWheelPositions.length === 4)
+      ? detectedWheelPositions
       : cfg.wheelPositions
 
     const connY = cfg.wheelConnectionY ?? -0.05
@@ -259,7 +259,7 @@ export class Car {
     // RPM Simulation based on Gear Ratio
     const maxRPM = 7500
     const idleRPM = 800
-    
+
     if (this.gearIndex <= 1) {
       // Neutral/Reverse logic
       const targetRPM = idleRPM + input.throttle * 3000
@@ -268,19 +268,19 @@ export class Car {
       // Drive gears: RPM proportional to speed * ratio
       const ratio = Math.abs(this.GEAR_RATIOS[this.gearIndex])
       // Constant chosen so that at 240km/h in top gear (0.72) we are near redline
-      const speedFactor = 35 
+      const speedFactor = 35
       let targetRPM = idleRPM + (this.speedKmh * ratio * speedFactor)
-      
+
       // Add some "throttle blip" or "load" effect
       targetRPM += input.throttle * 600
 
       // If we just shifted, allow the RPM to drop and stay down for a moment
       const shiftDropFactor = this.gearIndex > prevGearIndex ? 0.5 : 1.0
       const lerpSpeed = this.gearIndex !== prevGearIndex ? 1.0 : 5.0
-      
+
       this.rpm = THREE.MathUtils.lerp(this.rpm, targetRPM, Math.min(1, dt * lerpSpeed))
     }
-    
+
     this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm))
 
     // Engine force — cannon-es convention: negative = forward, positive = backward
@@ -293,8 +293,8 @@ export class Car {
     const brakeF = input.handbrake
       ? 0  // front wheels free; only rear gets locked below
       : input.brake > 0 && this.gearIndex !== 0
-      ? input.brake * maxBrakeForce
-      : 0
+        ? input.brake * maxBrakeForce
+        : 0
 
     // Steering — cannon-es: positive steer = left turn, so negate our convention
     const steer = -input.steering * maxSteer
@@ -347,8 +347,8 @@ export class Car {
       return
     }
 
-    const upThresholds =   [999, 999, 30, 60, 100, 140, 180, 999]
-    const downThresholds = [  0,   0,  0, 25,  55,  90, 130, 160]
+    const upThresholds = [999, 999, 30, 60, 100, 140, 180, 999]
+    const downThresholds = [0, 0, 0, 25, 55, 90, 130, 160]
 
     if (this.gearIndex < 7 && this.speedKmh > upThresholds[this.gearIndex]) {
       this.gearIndex++
@@ -377,7 +377,6 @@ export class Car {
       wm.position.set(t.position.x, t.position.y, t.position.z)
       wm.quaternion.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
     })
-
   }
 
   getPosition(): THREE.Vector3 {

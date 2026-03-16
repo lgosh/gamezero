@@ -1,0 +1,54 @@
+import * as THREE from 'three'
+import * as CANNON from 'cannon-es'
+import { Car } from './Car'
+import type { PhysicsWorld } from '../PhysicsWorld'
+import { loadCarModel, extractWheels } from './ModelLoader'
+
+/** BMW M5 CS — loaded from /models/bmw_m5_cs.glb */
+export class BMWCS extends Car {
+  constructor(scene: THREE.Scene, physics: PhysicsWorld) {
+    super(scene, physics)
+
+    this.config = {
+      mass: 1670,              // E34 M5 curb weight ~1670 kg
+      wheelRadius: 0.420,
+      wheelFriction: 1.55,
+      suspensionStiffness: 35,
+      suspensionRestLength: 0.35,
+      suspensionDamping: 2.3,
+      suspensionCompression: 4.4,
+      maxEngineForce: 6800,
+      maxBrakeForce: 150,
+      maxSteeringAngle: 0.46,
+      rollInfluence: 0.015,
+      chassisHalfExtents: new CANNON.Vec3(1.0, 0.42, 2.4),
+      chassisOffset: new CANNON.Vec3(0, 0.10, 0),
+      wheelConnectionY: -0.05,
+      wheelPositions: [
+        new CANNON.Vec3(-0.95, -0.05, 1.45), // FL
+        new CANNON.Vec3(0.95, -0.05, 1.45), // FR
+        new CANNON.Vec3(-0.95, -0.05, -1.45), // RL
+        new CANNON.Vec3(0.95, -0.05, -1.45), // RR
+      ],
+    }
+  }
+
+  async spawn(startPos: THREE.Vector3): Promise<void> {
+    const detectedPositions = await this.loadBody()
+    this.buildPhysics(startPos, detectedPositions)
+  }
+
+  private async loadBody(): Promise<CANNON.Vec3[]> {
+    // targetLength 4.95 matches Mercedes visual size
+    const { bodyGroup } = await loadCarModel('/models/bmw_m5_cs.glb', 4.95)
+
+    const { groups, positions } = extractWheels(bodyGroup, this.scene)
+    this.wheelMeshes = groups
+
+    this.registerDamageZone(bodyGroup, 'front', 0.35)
+    this.registerDamageZone(bodyGroup, 'rear', 0.30)
+
+    this.chassisMesh.add(bodyGroup)
+    return positions
+  }
+}

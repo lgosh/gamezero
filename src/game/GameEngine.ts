@@ -1,8 +1,9 @@
 import * as THREE from 'three'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass'
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass'
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import * as CANNON from 'cannon-es'
 import { PhysicsWorld } from './PhysicsWorld'
 import { InputManager } from './InputManager'
 import { SoundSystem } from './SoundSystem'
@@ -12,13 +13,14 @@ import { OSMMap } from './world/OSMMap'
 import { BMW } from './entities/BMW'
 import { Mercedes } from './entities/Mercedes'
 import { Toyota } from './entities/Toyota'
+import { BMWCS } from './entities/BMWCS'
 import { Player } from './entities/Player'
 import type { Car } from './entities/Car'
 import { NetworkManager } from './NetworkManager'
 import type { RemotePlayerData, ChatMessage } from './NetworkManager'
 import { RemotePlayer } from './RemotePlayer'
 
-export type CarType = 'bmw' | 'mercedes' | 'toyota'
+export type CarType = 'bmw' | 'mercedes' | 'toyota' | 'bmwcs'
 export type GameState = 'loading' | 'playing' | 'paused' | 'crashed'
 type GameMode = 'driving' | 'onfoot'
 
@@ -53,6 +55,7 @@ export class GameEngine {
   private bmwCar!: Car      // stable reference — never swaps
   private mercedesCar!: Car // stable reference — never swaps
   private toyotaCar!: Car   // stable reference — never swaps
+  private bmwcsCar!: Car    // stable reference — never swaps
   private allCars: Car[] = []
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
@@ -62,9 +65,10 @@ export class GameEngine {
   private spawnCz = 0
   private spawnHeading = 0
   private playerSpawnPos = new THREE.Vector3(-90, 1.0, 0)
-  private bmwSpawnPos  = new THREE.Vector3(-85, 2.0, -5)
-  private merSpawnPos  = new THREE.Vector3(-85, 2.0,  5)
-  private toySpawnPos  = new THREE.Vector3(-85, 2.0, 0)
+  private bmwSpawnPos = new THREE.Vector3(-85, 2.0, -5)
+  private merSpawnPos = new THREE.Vector3(-85, 2.0, 5)
+  private toySpawnPos = new THREE.Vector3(-85, 2.0, 0)
+  private bmwcsSpawnPos = new THREE.Vector3(-85, 2.0, -10) // 4th spawn position
 
   private state: GameState = 'loading'
   private carType: CarType = 'bmw'
@@ -88,14 +92,14 @@ export class GameEngine {
   // Multiplayer
   private network: NetworkManager | null = null
   private remotePlayers = new Map<string, RemotePlayer>()
-  private remoteStates  = new Map<string, RemotePlayerData>()
+  private remoteStates = new Map<string, RemotePlayerData>()
   private networkSendTimer = 0
   onChatMessage?: (msg: ChatMessage) => void
 
   // Noclip (free camera fly mode)
-  private noclipMode  = false
-  private noclipPos   = new THREE.Vector3()
-  private noclipYaw   = 0
+  private noclipMode = false
+  private noclipPos = new THREE.Vector3()
+  private noclipYaw = 0
   private noclipPitch = 0
   onNoclipChange?: (active: boolean) => void
 
@@ -190,29 +194,33 @@ export class GameEngine {
     this.spawnCx = base.cx + toMonNx * 50
     this.spawnCz = base.cz + toMonNz * 50
     this.spawnHeading = Math.atan2(monX - this.spawnCx, monZ - this.spawnCz)
-    // Three cars side by side: BMW left, Toyota centre, Mercedes right
-    this.bmwSpawnPos  = new THREE.Vector3(this.spawnCx + perpX * 6, 2.0, this.spawnCz + perpZ * 6)
-    this.toySpawnPos  = new THREE.Vector3(this.spawnCx, 2.0, this.spawnCz)
-    this.merSpawnPos  = new THREE.Vector3(this.spawnCx - perpX * 6, 2.0, this.spawnCz - perpZ * 6)
-    const bmwPos      = this.bmwSpawnPos.clone()
-    const toyotaPos   = this.toySpawnPos.clone()
+    // Four cars side by side
+    this.bmwSpawnPos = new THREE.Vector3(this.spawnCx + perpX * 4, 2.0, this.spawnCz + perpZ * 4)
+    this.toySpawnPos = new THREE.Vector3(this.spawnCx, 2.0, this.spawnCz)
+    this.merSpawnPos = new THREE.Vector3(this.spawnCx - perpX * 4, 2.0, this.spawnCz - perpZ * 4)
+    this.bmwcsSpawnPos = new THREE.Vector3(this.spawnCx + perpX * 8, 2.0, this.spawnCz + perpZ * 8)
+    const bmwPos = this.bmwSpawnPos.clone()
+    const toyotaPos = this.toySpawnPos.clone()
     const mercedesPos = this.merSpawnPos.clone()
+    const bmwcsPos = this.bmwcsSpawnPos.clone()
 
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
-    const bmw      = new BMW(this.scene, this.physicsWorld)
-    const toyota   = new Toyota(this.scene, this.physicsWorld)
-    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos), toyota.spawn(toyotaPos)])
+    const bmw = new BMW(this.scene, this.physicsWorld)
+    const toyota = new Toyota(this.scene, this.physicsWorld)
+    const bmwcs = new BMWCS(this.scene, this.physicsWorld)
+    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos), toyota.spawn(toyotaPos), bmwcs.spawn(bmwcsPos)])
 
     if (this.destroyed) {
-      mercedes.dispose(); bmw.dispose(); toyota.dispose()
+      mercedes.dispose(); bmw.dispose(); toyota.dispose(); bmwcs.dispose()
       return
     }
 
     // Stable references — never swap
-    this.bmwCar      = bmw
+    this.bmwCar = bmw
     this.mercedesCar = mercedes
-    this.toyotaCar   = toyota
-    this.allCars     = [bmw, mercedes, toyota]
+    this.toyotaCar = toyota
+    this.bmwcsCar = bmwcs
+    this.allCars = [bmw, mercedes, toyota, bmwcs]
 
     // Active car starts as BMW; the others are parked
     this.car = bmw; this.parkedCar = mercedes
@@ -229,6 +237,7 @@ export class GameEngine {
     wireImpact(mercedes)
     wireImpact(bmw)
     wireImpact(toyota)
+    wireImpact(bmwcs)
 
     // Orient all cars to face the Freedom Monument
     const facingHeading = (pos: THREE.Vector3) =>
@@ -238,9 +247,10 @@ export class GameEngine {
       body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
       body.previousQuaternion.copy(body.quaternion)
     }
-    setFacing(bmw.chassisBody,      bmwPos)
+    setFacing(bmw.chassisBody, bmwPos)
     setFacing(mercedes.chassisBody, mercedesPos)
-    setFacing(toyota.chassisBody,   toyotaPos)
+    setFacing(toyota.chassisBody, toyotaPos)
+    setFacing(bmwcs.chassisBody, bmwcsPos)
 
     // All cars parked at start — player spawns 10m behind cars so all 3 are visible
     for (const c of this.allCars) c.chassisBody.sleep()
@@ -262,13 +272,13 @@ export class GameEngine {
         for (const p of existing) this.addRemotePlayer(p)
       }
       this.network.onPlayerJoined = (data) => this.addRemotePlayer(data)
-      this.network.onPlayerLeft   = (id)  => this.removeRemotePlayer(id)
+      this.network.onPlayerLeft = (id) => this.removeRemotePlayer(id)
       this.network.onStates = (players) => {
         for (const p of players) {
           this.remoteStates.set(p.id, p)
           const rp = this.remotePlayers.get(p.id)
           if (rp) rp.applyRemoteState(p)
-          else    this.addRemotePlayer(p)
+          else this.addRemotePlayer(p)
         }
       }
       this.network.onChat = (msg) => this.onChatMessage?.(msg)
@@ -300,23 +310,50 @@ export class GameEngine {
     this.remoteStates.delete(id)
   }
 
-  /** Move the actual game Car entity to wherever the remote player is driving it. */
-  private updateRemoteCars() {
+  /** Smoothly interpolate remote cars to wherever the remote player is driving it. */
+  private updateRemoteCars(dt: number) {
+    const alpha = Math.min(1, dt * 14) // Same interpolation speed as RemotePlayer
+
     for (const state of this.remoteStates.values()) {
       if (state.mode !== 'driving' || !state.carId) continue
-      const car = state.carId === 'bmw' ? this.bmwCar : state.carId === 'toyota' ? this.toyotaCar : this.mercedesCar
+      const car = state.carId === 'bmw' ? this.bmwCar : state.carId === 'toyota' ? this.toyotaCar : state.carId === 'bmwcs' ? this.bmwcsCar : this.mercedesCar
+      
       // Never override a car the local player is currently driving
-      if (car === this.car && this.gameMode === 'driving') continue
-      car.chassisBody.position.set(state.pos[0], state.pos[1], state.pos[2])
-      car.chassisBody.quaternion.set(state.quat[0], state.quat[1], state.quat[2], state.quat[3])
-      car.chassisBody.velocity.set(state.vel[0], state.vel[1], state.vel[2])
+      if (car === this.car && this.gameMode === 'driving') {
+        if (car.chassisBody.type !== CANNON.Body.DYNAMIC) {
+          car.chassisBody.type = CANNON.Body.DYNAMIC
+          car.chassisBody.wakeUp()
+        }
+        continue
+      }
+
+      // Convert to kinematic so it doesn't fight the local physics engine
+      if (car.chassisBody.type !== CANNON.Body.KINEMATIC) {
+        car.chassisBody.type = CANNON.Body.KINEMATIC
+        car.chassisBody.velocity.setZero()
+        car.chassisBody.angularVelocity.setZero()
+      }
+
+      // LERP/SLERP towards the target network position
+      const targetPos = new CANNON.Vec3(state.pos[0], state.pos[1], state.pos[2])
+      const targetQuat = new CANNON.Quaternion(state.quat[0], state.quat[1], state.quat[2], state.quat[3])
+      
+      // If it's too far (e.g. just spawned or teleported), snap instead of slow-lerping across the map
+      if (car.chassisBody.position.distanceTo(targetPos) > 10) {
+        car.chassisBody.position.copy(targetPos)
+        car.chassisBody.quaternion.copy(targetQuat)
+      } else {
+        car.chassisBody.position.lerp(targetPos, alpha, car.chassisBody.position)
+        car.chassisBody.quaternion.slerp(targetQuat, alpha, car.chassisBody.quaternion)
+      }
+
       car.syncVisual()
     }
   }
 
   private getLocalCarId(): string | null {
     if (this.gameMode !== 'driving') return null
-    return this.car === this.bmwCar ? 'bmw' : this.car === this.toyotaCar ? 'toyota' : 'mercedes'
+    return this.car === this.bmwCar ? 'bmw' : this.car === this.toyotaCar ? 'toyota' : this.car === this.bmwcsCar ? 'bmwcs' : 'mercedes'
   }
 
   private getRemoteDriverOf(carId: string): string | null {
@@ -368,18 +405,18 @@ export class GameEngine {
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
     // Physics step (always runs — keeps remote players alive during noclip too)
     this.physicsWorld.step(dt)
-    this.updateRemoteCars()
+    this.updateRemoteCars(dt)
     this.map.syncProps()
 
     // ── Noclip (free camera fly) ──────────────────────────────────────────
     if (this.noclipMode) {
       // Mouse → rotate
-      this.noclipYaw   -= input.mouseDx * 0.003
+      this.noclipYaw -= input.mouseDx * 0.003
       this.noclipPitch -= input.mouseDy * 0.003
       this.noclipPitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.noclipPitch))
 
       // Build camera quaternion from yaw + pitch (YXZ equivalent via quaternion multiply)
-      const yawQ   = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.noclipYaw)
+      const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.noclipYaw)
       const pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), this.noclipPitch)
       this.camera.quaternion.copy(yawQ).multiply(pitchQ)
 
@@ -388,7 +425,7 @@ export class GameEngine {
       this.camera.getWorldDirection(dir)
       const right = new THREE.Vector3(Math.cos(this.noclipYaw), 0, Math.sin(this.noclipYaw))
       const speed = 80 * dt
-      this.noclipPos.addScaledVector(dir,   speed * (input.throttle - input.brake))
+      this.noclipPos.addScaledVector(dir, speed * (input.throttle - input.brake))
       this.noclipPos.addScaledVector(right, speed * input.steering)
       this.camera.position.copy(this.noclipPos)
 
@@ -415,7 +452,7 @@ export class GameEngine {
 
       this.lastHUDState = {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
-        state: this.state, carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : 'mercedes', onFoot: true,
+        state: this.state, carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : this.car instanceof BMWCS ? 'bmwcs' : 'mercedes', onFoot: true,
         playerPos: currentPlayerPos, playerHeading: currentHeading,
         minimapCanvas: this.map.minimapCanvas ?? undefined,
       }
@@ -442,8 +479,13 @@ export class GameEngine {
       this.hornActive = false
     }
 
-    // Car update
+    // Car update (physics inputs for driven car)
     const { rpm, speedKmh, gear, lateralSpeedMs } = this.car.update(input, dt)
+
+    // Sync visual meshes for ALL cars, so parked cars visually react if we crash into them
+    for (const c of this.allCars) {
+      if (c !== this.car) c.syncVisual()
+    }
 
     // Gear change sound — only for actual drive gears (≥2), not R or N
     if (gear !== this.lastGear) {
@@ -473,8 +515,8 @@ export class GameEngine {
       const exhaustOffsets = [
         new THREE.Vector3(-0.55, -0.20, -2.4),
         new THREE.Vector3(-0.40, -0.20, -2.4),
-        new THREE.Vector3( 0.40, -0.20, -2.4),
-        new THREE.Vector3( 0.55, -0.20, -2.4),
+        new THREE.Vector3(0.40, -0.20, -2.4),
+        new THREE.Vector3(0.55, -0.20, -2.4),
       ]
       for (const off of exhaustOffsets) {
         const pos = carPos.clone().add(off.clone().applyQuaternion(q))
@@ -519,7 +561,7 @@ export class GameEngine {
       gear,
       damage: this.car.damage,
       state: this.state,
-      carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : 'mercedes',
+      carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : this.car instanceof BMWCS ? 'bmwcs' : 'mercedes',
       onFoot: false,
       playerPos: currentPlayerPos,
       playerHeading: currentHeading,
@@ -547,15 +589,15 @@ export class GameEngine {
       const p = this.player.getPosition()
       const fwd = this.player.getForwardVector()
       const yaw = Math.atan2(fwd.x, fwd.z)
-      pos  = [p.x, p.y, p.z]
+      pos = [p.x, p.y, p.z]
       quat = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)]
-      vel  = [0, 0, 0]
+      vel = [0, 0, 0]
     } else {
       const p = this.car.getPosition()
       const b = this.car.chassisBody
-      pos  = [p.x, p.y, p.z]
+      pos = [p.x, p.y, p.z]
       quat = [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w]
-      vel  = [b.velocity.x, b.velocity.y, b.velocity.z]
+      vel = [b.velocity.x, b.velocity.y, b.velocity.z]
       speedKmh = this.car.speedKmh
     }
 
@@ -594,7 +636,7 @@ export class GameEngine {
     if (closestDist > 5) return
 
     // If a remote player is driving this car, carjack them (they get force-ejected)
-    const closestCarId = closest === this.bmwCar ? 'bmw' : closest === this.toyotaCar ? 'toyota' : 'mercedes'
+    const closestCarId = closest === this.bmwCar ? 'bmw' : closest === this.toyotaCar ? 'toyota' : closest === this.bmwcsCar ? 'bmwcs' : 'mercedes'
     const remoteDriverId = this.getRemoteDriverOf(closestCarId)
     if (remoteDriverId) {
       this.network?.sendCarjack(remoteDriverId, closestCarId)
@@ -632,9 +674,10 @@ export class GameEngine {
     } else {
       // ── Singleplayer respawn: reset all cars to original positions ──
       const spawnPairs: [Car, THREE.Vector3][] = [
-        [this.bmwCar,      this.bmwSpawnPos],
+        [this.bmwCar, this.bmwSpawnPos],
         [this.mercedesCar, this.merSpawnPos],
-        [this.toyotaCar,   this.toySpawnPos],
+        [this.toyotaCar, this.toySpawnPos],
+        [this.bmwcsCar, this.bmwcsSpawnPos],
       ]
       const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
         const h = Math.atan2(-137 - pos.x, -136 - pos.z)
@@ -698,7 +741,7 @@ export class GameEngine {
       this.noclipPos.copy(this.camera.position)
       const dir = new THREE.Vector3()
       this.camera.getWorldDirection(dir)
-      this.noclipYaw   = Math.atan2(dir.x, -dir.z)
+      this.noclipYaw = Math.atan2(dir.x, -dir.z)
       this.noclipPitch = Math.asin(Math.max(-1, Math.min(1, dir.y)))
     } else {
       // Hand camera back to the normal camera system on the next frame
