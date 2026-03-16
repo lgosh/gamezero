@@ -268,7 +268,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
       <div className="absolute top-6 left-6 pointer-events-none">
         <div className="hud-panel px-4 py-2 flex flex-col gap-0.5">
           <div className="text-white/90 font-bold text-sm tracking-wider uppercase">
-            {state.carType === 'bmw' ? '🚗 BMW M5 Competition' : '🚗 Mercedes-AMG E63 S'}
+            {state.carType === 'bmw' ? '🚗 BMW M5 Competition' : state.carType === 'toyota' ? '🚗 Toyota RAV4 Hybrid' : '🚗 Mercedes-AMG E63 S'}
           </div>
           <div className="text-white/45 text-[11px] font-mono">
             📍 Freedom Square · Tbilisi

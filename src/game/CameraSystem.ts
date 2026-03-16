@@ -10,6 +10,9 @@ export class CameraSystem {
   private mode: CameraMode = 'chase'
   private initialized = false
 
+  // Smoothed follow-direction for chase cam (GTA-style: direction smooths, position doesn't lag)
+  private smoothFollowDir = new THREE.Vector3(0, 0, -1)
+
   // Mouse-look orbit state (chase mode only)
   private orbitYaw   = 0   // horizontal orbit offset (radians)
   private orbitPitch = 0   // vertical orbit offset (radians)
@@ -68,24 +71,33 @@ export class CameraSystem {
         if (Math.abs(this.orbitPitch) < 0.001) this.orbitPitch = 0
       }
 
-      // Rotate dir by orbitYaw and apply pitch for camera position
-      const orbitedDir = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), this.orbitYaw)
-      const cosPitch   = Math.cos(this.orbitPitch)
-      const sinPitch   = Math.sin(this.orbitPitch)
-
-      const idealPos = carPos.clone()
-        .sub(orbitedDir.clone().multiplyScalar(dist * cosPitch))
-        .add(new THREE.Vector3(0, height + dist * sinPitch, 0))
-      const idealLookAt = carPos.clone().add(new THREE.Vector3(0, 0.8, 0))
-
+      // ── GTA-style: smooth the DIRECTION the camera follows behind the car ──
+      // The camera position itself doesn't lerp — only the follow-direction smooths.
+      // This eliminates the "left behind" lag while keeping cinematic sweep on turns.
       if (!this.initialized) {
-        this.currentPos.copy(idealPos)
-        this.currentLookAt.copy(idealLookAt)
+        this.smoothFollowDir.copy(dir)
+        this.currentLookAt.copy(carPos).add(new THREE.Vector3(0, 0.8, 0))
         this.initialized = true
       }
 
-      this.currentPos.lerp(idealPos, Math.min(1, dt * 12)) // Increased from 4
-      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 18)) // Increased from 8
+      // Tighter tracking at speed, looser at rest for cinematic feel
+      const dirSmooth = Math.min(1, dt * (speedKmh > 5 ? 8 : 4))
+      this.smoothFollowDir.lerp(dir, dirSmooth)
+      this.smoothFollowDir.normalize()
+
+      // Apply orbit to the smoothed direction
+      const orbitedDir = this.smoothFollowDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), this.orbitYaw)
+      const cosPitch   = Math.cos(this.orbitPitch)
+      const sinPitch   = Math.sin(this.orbitPitch)
+
+      // Position is set directly — no lerp, no lag
+      this.currentPos.copy(carPos)
+        .sub(orbitedDir.clone().multiplyScalar(dist * cosPitch))
+        .add(new THREE.Vector3(0, height + dist * sinPitch, 0))
+
+      // Look-at smooths slightly for cinematic feel
+      const idealLookAt = carPos.clone().add(new THREE.Vector3(0, 0.8, 0))
+      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 25))
 
     } else if (this.mode === 'cockpit') {
       const right = new THREE.Vector3().crossVectors(carUp, carForward).normalize()

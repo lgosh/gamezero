@@ -45,8 +45,26 @@ export async function loadCarModel(
 
   if (options?.rotateY !== undefined) root.rotation.y = options.rotateY
 
-  const bbox0 = new THREE.Box3().setFromObject(root)
-  const size0 = bbox0.getSize(new THREE.Vector3())
+  // Compute raw bounding box. If the scene bbox is unreasonably large compared to
+  // what a car should be (longest side > 20× targetLength), try to find the car
+  // cluster within the scene and use that for scaling instead.
+  let bbox0 = new THREE.Box3().setFromObject(root)
+  let size0 = bbox0.getSize(new THREE.Vector3())
+  const longestRaw = Math.max(size0.x, size0.y, size0.z)
+  console.log(`[ModelLoader] ${url} raw bbox: ${size0.x.toFixed(2)} × ${size0.y.toFixed(2)} × ${size0.z.toFixed(2)} (longest=${longestRaw.toFixed(2)})`)
+
+  // If the scene bbox is significantly larger than expected (outlier meshes like
+  // misplaced verts or ground planes), find the actual car cluster for scaling.
+  if (longestRaw > targetLength * 1.8) {
+    console.warn(`[ModelLoader] Scene bbox too large (${longestRaw.toFixed(1)} vs target ${targetLength}), searching for car cluster...`)
+    const carBbox = findCarCluster(root)
+    if (carBbox) {
+      bbox0 = carBbox
+      size0 = carBbox.getSize(new THREE.Vector3())
+      console.log(`[ModelLoader] Car cluster: ${size0.x.toFixed(2)} × ${size0.y.toFixed(2)} × ${size0.z.toFixed(2)}`)
+    }
+  }
+
   if (options?.targetWidth !== undefined) {
     const scaleXY = options.targetWidth / size0.x
     const scaleZ  = targetLength / size0.z
@@ -68,115 +86,119 @@ export async function loadCarModel(
 }
 
 /**
- * ULTRA ROBUST wheel extraction.
- * Clusters EVERYTHING that might be a wheel part.
+ * Find the main car geometry cluster inside a scene that may contain extra objects.
+ * Returns a bbox around the largest connected cluster of meshes, or null.
+ */
+function findCarCluster(root: THREE.Group): THREE.Box3 | null {
+  // Collect all mesh bounding boxes
+  const meshBoxes: THREE.Box3[] = []
+  root.traverse((obj) => {
+    if (!(obj as THREE.Mesh).isMesh) return
+    const bbox = new THREE.Box3().setFromObject(obj)
+    if (!bbox.isEmpty()) meshBoxes.push(bbox)
+  })
+  if (meshBoxes.length === 0) return null
+
+  // Find the median center point — the car is the densest cluster near the median
+  const centers = meshBoxes.map(b => b.getCenter(new THREE.Vector3()))
+  const medX = centers.map(c => c.x).sort((a, b) => a - b)[Math.floor(centers.length / 2)]
+  const medY = centers.map(c => c.y).sort((a, b) => a - b)[Math.floor(centers.length / 2)]
+  const medZ = centers.map(c => c.z).sort((a, b) => a - b)[Math.floor(centers.length / 2)]
+  const median = new THREE.Vector3(medX, medY, medZ)
+
+  // Keep meshes within 5 units of the median (contains car body, excludes outliers)
+  const carBox = new THREE.Box3()
+  for (let i = 0; i < meshBoxes.length; i++) {
+    if (centers[i].distanceTo(median) < 5) {
+      carBox.union(meshBoxes[i])
+    }
+  }
+  return carBox.isEmpty() ? null : carBox
+}
+
+/**
+ * Robust wheel extraction with two strategies:
+ * 1. Name-based — matches nodes named wheel/tire/rim/hub/brake/etc.
+ * 2. Position-based fallback — finds small meshes at the 4 bottom corners of the car.
+ * After extraction, each wheel group's geometry is re-centered to prevent orbit.
  */
 export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene): { groups: THREE.Group[], positions: CANNON.Vec3[] } {
   bodyGroup.updateWorldMatrix(true, true)
-  
-  const parts: { mesh: THREE.Mesh; worldCenter: THREE.Vector3 }[] = []
-  
-  // Helper to check if a node is part of a wheel
+
+  // ── Collect every mesh with its world-space bounding box ─────────────
+  const allMeshInfo: { mesh: THREE.Mesh; center: THREE.Vector3; size: THREE.Vector3 }[] = []
+  bodyGroup.traverse((obj) => {
+    if (!(obj as THREE.Mesh).isMesh) return
+    const mesh = obj as THREE.Mesh
+    const bbox = new THREE.Box3().setFromObject(mesh)
+    if (bbox.isEmpty()) return
+    const size = bbox.getSize(new THREE.Vector3())
+    if (size.x >= 2.5 || size.y >= 2.5 || size.z >= 2.5) return // too large for a wheel part
+    allMeshInfo.push({ mesh, center: bbox.getCenter(new THREE.Vector3()), size })
+  })
+
+  // ── Strategy 1: name-based detection ─────────────────────────────────
   const isWheelNode = (node: THREE.Object3D): boolean => {
     let curr: THREE.Object3D | null = node
     while (curr && curr !== bodyGroup) {
       const name = curr.name.toLowerCase()
-      if (name.match(/wheel|tire|tyre|rim|hub|disc|brake|rotor|caliper|axle/)) return true
+      if (name.match(/wheel|tire|tyre|rim|hub|disc|brake|rotor|caliper|axle|rad/)) return true
       curr = curr.parent
     }
     return false
   }
 
-  bodyGroup.traverse((obj) => {
-    if (!(obj as THREE.Mesh).isMesh) return
-    const mesh = obj as THREE.Mesh
-    
-    if (isWheelNode(mesh)) {
-      const bbox = new THREE.Box3().setFromObject(mesh)
-      if (bbox.isEmpty()) return
-      const size = bbox.getSize(new THREE.Vector3())
-      // Sanity check: wheels are roughly circular/compact
-      // In 4k models, they can be detailed, but not 10m long.
-      if (size.x < 2.5 && size.y < 2.5 && size.z < 2.5) {
-        parts.push({ mesh, worldCenter: bbox.getCenter(new THREE.Vector3()) })
-      }
-    }
-  })
+  const nameParts = allMeshInfo.filter(p => isWheelNode(p.mesh))
+  let final4 = clusterAndPick4(nameParts)
 
-  // Cluster parts (0.6m radius to ensure we grab brakes + tires together)
-  const clusters: { center: THREE.Vector3; meshes: THREE.Mesh[] }[] = []
-  for (const p of parts) {
-    let found = false
-    for (const c of clusters) {
-      if (p.worldCenter.distanceTo(c.center) < 0.6) {
-        c.meshes.push(p.mesh)
-        found = true
-        break
-      }
-    }
-    if (!found) clusters.push({ center: p.worldCenter.clone(), meshes: [p.mesh] })
+  // ── Strategy 2: position-based fallback (all small meshes below car midline) ──
+  if (!final4) {
+    // Compute car bounding box to find the bottom half
+    const carBox = new THREE.Box3()
+    bodyGroup.traverse(o => { if ((o as THREE.Mesh).isMesh) carBox.expandByObject(o) })
+    const carCenter = carBox.getCenter(new THREE.Vector3())
+
+    // Only consider meshes in the lower half of the car (where wheels live)
+    const lowParts = allMeshInfo.filter(p => p.center.y < carCenter.y)
+    final4 = clusterAndPick4(lowParts)
   }
 
-  // Recalculate true cluster centers
-  const refined = clusters.map(c => {
-    const box = new THREE.Box3()
-    c.meshes.forEach(m => box.expandByObject(m))
-    const center = box.getCenter(new THREE.Vector3())
-    return { center, meshes: c.meshes }
-  })
-
-  // Pick 4 corner-most clusters
-  const top4 = refined.sort((a, b) => {
-    const scoreA = Math.abs(a.center.x) * 2 + Math.abs(a.center.z) - a.center.y * 3
-    const scoreB = Math.abs(b.center.x) * 2 + Math.abs(b.center.z) - b.center.y * 3
-    return scoreB - scoreA
-  }).slice(0, 4)
-
-  if (top4.length < 4) {
-    // Log all mesh names to help debug missing wheel detection
+  if (!final4) {
     const allNames: string[] = []
     bodyGroup.traverse(o => { if (o.name) allNames.push(o.name) })
-    console.warn(`[ModelLoader] Found only ${top4.length} wheel clusters. All node names:`, allNames.slice(0, 40))
+    console.warn(`[ModelLoader] Could not find 4 wheel clusters. Node names:`, allNames.slice(0, 50))
     return { groups: [], positions: [] }
   }
 
-  // Sort: higher Z = front, lower X = left -> [FL, FR, RL, RR]
-  const ordered = top4.sort((a, b) => b.center.z - a.center.z)
-  const front = ordered.slice(0, 2).sort((a, b) => a.center.x - b.center.x)
-  const rear  = ordered.slice(2, 4).sort((a, b) => a.center.x - b.center.x)
-  const final = [...front, ...rear]
-
-  // Second pass: pull in any mesh near a wheel center that wasn't matched by name
-  // (rims, calipers, etc. with non-standard names)
-  const alreadyPicked = new Set(parts.map(p => p.mesh))
-  bodyGroup.traverse((obj) => {
-    if (!(obj as THREE.Mesh).isMesh) return
-    const mesh = obj as THREE.Mesh
-    if (alreadyPicked.has(mesh)) return
-    const bbox = new THREE.Box3().setFromObject(mesh)
-    if (bbox.isEmpty()) return
-    const size = bbox.getSize(new THREE.Vector3())
-    if (size.x >= 2.5 || size.y >= 2.5 || size.z >= 2.5) return
-    const center = bbox.getCenter(new THREE.Vector3())
-    for (const cluster of final) {
-      if (center.distanceTo(cluster.center) < 0.55) {
-        cluster.meshes.push(mesh)
-        alreadyPicked.add(mesh)
+  // ── Pull in nearby meshes not yet picked (rims, calipers, etc.) ─────
+  const picked = new Set(final4.flatMap(c => c.meshes))
+  for (const info of allMeshInfo) {
+    if (picked.has(info.mesh)) continue
+    for (const cluster of final4) {
+      if (info.center.distanceTo(cluster.center) < 0.55) {
+        cluster.meshes.push(info.mesh)
+        picked.add(info.mesh)
         break
       }
     }
-  })
+  }
 
+  // ── Build wheel groups with proper centering ────────────────────────
   const groups: THREE.Group[] = []
   const positions: CANNON.Vec3[] = []
 
-  for (const cluster of final) {
+  for (const cluster of final4) {
+    // Recalculate center from ALL meshes in the cluster (including second-pass)
+    const cbox = new THREE.Box3()
+    cluster.meshes.forEach(m => cbox.expandByObject(m))
+    const trueCenter = cbox.getCenter(new THREE.Vector3())
+
     const group = new THREE.Group()
     cluster.meshes.forEach(m => {
       m.updateWorldMatrix(true, false)
       const geom = m.geometry.clone()
       geom.applyMatrix4(m.matrixWorld)
-      geom.translate(-cluster.center.x, -cluster.center.y, -cluster.center.z)
+      geom.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z)
       m.geometry = geom
       m.parent?.remove(m)
       m.position.set(0, 0, 0)
@@ -184,13 +206,72 @@ export function extractWheels(bodyGroup: THREE.Group, targetScene: THREE.Scene):
       m.scale.set(1, 1, 1)
       group.add(m)
     })
-    group.position.copy(cluster.center)
+
+    // Re-center pass: if geometry centroid drifted from (0,0,0), fix it
+    const gbox = new THREE.Box3()
+    group.traverse(o => { if ((o as THREE.Mesh).isMesh) gbox.expandByObject(o) })
+    if (!gbox.isEmpty()) {
+      const drift = gbox.getCenter(new THREE.Vector3())
+      if (drift.length() > 0.001) {
+        group.traverse(o => {
+          if ((o as THREE.Mesh).isMesh) {
+            ;(o as THREE.Mesh).geometry.translate(-drift.x, -drift.y, -drift.z)
+          }
+        })
+        trueCenter.add(drift)
+      }
+    }
+
+    group.position.copy(trueCenter)
     targetScene.add(group)
     groups.push(group)
-    positions.push(new CANNON.Vec3(cluster.center.x, cluster.center.y, cluster.center.z))
+    positions.push(new CANNON.Vec3(trueCenter.x, trueCenter.y, trueCenter.z))
   }
 
   return { groups, positions }
+}
+
+/** Cluster mesh infos by proximity, then pick the 4 corner-most clusters → [FL, FR, RL, RR] */
+function clusterAndPick4(
+  parts: { mesh: THREE.Mesh; center: THREE.Vector3 }[],
+): { center: THREE.Vector3; meshes: THREE.Mesh[] }[] | null {
+  if (parts.length === 0) return null
+
+  // Cluster within 0.6m radius
+  const clusters: { center: THREE.Vector3; meshes: THREE.Mesh[] }[] = []
+  for (const p of parts) {
+    let found = false
+    for (const c of clusters) {
+      if (p.center.distanceTo(c.center) < 0.6) {
+        c.meshes.push(p.mesh)
+        found = true
+        break
+      }
+    }
+    if (!found) clusters.push({ center: p.center.clone(), meshes: [p.mesh] })
+  }
+
+  // Recalculate true cluster centers from bounding boxes
+  const refined = clusters.map(c => {
+    const box = new THREE.Box3()
+    c.meshes.forEach(m => box.expandByObject(m))
+    return { center: box.getCenter(new THREE.Vector3()), meshes: c.meshes }
+  })
+
+  // Pick 4 corner-most clusters (farthest from center horizontally, lowest vertically)
+  const top4 = refined.sort((a, b) => {
+    const scoreA = Math.abs(a.center.x) * 2 + Math.abs(a.center.z) - a.center.y * 3
+    const scoreB = Math.abs(b.center.x) * 2 + Math.abs(b.center.z) - b.center.y * 3
+    return scoreB - scoreA
+  }).slice(0, 4)
+
+  if (top4.length < 4) return null
+
+  // Sort: higher Z = front, lower X = left → [FL, FR, RL, RR]
+  const ordered = top4.sort((a, b) => b.center.z - a.center.z)
+  const front = ordered.slice(0, 2).sort((a, b) => a.center.x - b.center.x)
+  const rear  = ordered.slice(2, 4).sort((a, b) => a.center.x - b.center.x)
+  return [...front, ...rear]
 }
 
 export function extractWheelsByKeyword(bodyGroup: THREE.Group, targetScene: THREE.Scene): THREE.Group[] {

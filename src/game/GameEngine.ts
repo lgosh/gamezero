@@ -11,13 +11,14 @@ import { ParticleSystem } from './ParticleSystem'
 import { OSMMap } from './world/OSMMap'
 import { BMW } from './entities/BMW'
 import { Mercedes } from './entities/Mercedes'
+import { Toyota } from './entities/Toyota'
 import { Player } from './entities/Player'
 import type { Car } from './entities/Car'
 import { NetworkManager } from './NetworkManager'
 import type { RemotePlayerData, ChatMessage } from './NetworkManager'
 import { RemotePlayer } from './RemotePlayer'
 
-export type CarType = 'bmw' | 'mercedes'
+export type CarType = 'bmw' | 'mercedes' | 'toyota'
 export type GameState = 'loading' | 'playing' | 'paused' | 'crashed'
 type GameMode = 'driving' | 'onfoot'
 
@@ -48,9 +49,11 @@ export class GameEngine {
   private particleSystem!: ParticleSystem
   private map!: OSMMap
   private car!: Car
-  private parkedCar!: Car   // second car always spawned at start
+  private parkedCar!: Car   // whichever car the player last drove that isn't active
   private bmwCar!: Car      // stable reference — never swaps
   private mercedesCar!: Car // stable reference — never swaps
+  private toyotaCar!: Car   // stable reference — never swaps
+  private allCars: Car[] = []
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
 
@@ -58,8 +61,10 @@ export class GameEngine {
   private spawnCx = -90
   private spawnCz = 0
   private spawnHeading = 0
+  private playerSpawnPos = new THREE.Vector3(-90, 1.0, 0)
   private bmwSpawnPos  = new THREE.Vector3(-85, 2.0, -5)
   private merSpawnPos  = new THREE.Vector3(-85, 2.0,  5)
+  private toySpawnPos  = new THREE.Vector3(-85, 2.0, 0)
 
   private state: GameState = 'loading'
   private carType: CarType = 'bmw'
@@ -185,25 +190,31 @@ export class GameEngine {
     this.spawnCx = base.cx + toMonNx * 50
     this.spawnCz = base.cz + toMonNz * 50
     this.spawnHeading = Math.atan2(monX - this.spawnCx, monZ - this.spawnCz)
-    this.bmwSpawnPos  = new THREE.Vector3(this.spawnCx + perpX * 5, 2.0, this.spawnCz + perpZ * 5)
-    this.merSpawnPos  = new THREE.Vector3(this.spawnCx - perpX * 5, 2.0, this.spawnCz - perpZ * 5)
+    // Three cars side by side: BMW left, Toyota centre, Mercedes right
+    this.bmwSpawnPos  = new THREE.Vector3(this.spawnCx + perpX * 6, 2.0, this.spawnCz + perpZ * 6)
+    this.toySpawnPos  = new THREE.Vector3(this.spawnCx, 2.0, this.spawnCz)
+    this.merSpawnPos  = new THREE.Vector3(this.spawnCx - perpX * 6, 2.0, this.spawnCz - perpZ * 6)
     const bmwPos      = this.bmwSpawnPos.clone()
+    const toyotaPos   = this.toySpawnPos.clone()
     const mercedesPos = this.merSpawnPos.clone()
 
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
     const bmw      = new BMW(this.scene, this.physicsWorld)
-    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos)])
+    const toyota   = new Toyota(this.scene, this.physicsWorld)
+    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos), toyota.spawn(toyotaPos)])
 
     if (this.destroyed) {
-      mercedes.dispose(); bmw.dispose()
+      mercedes.dispose(); bmw.dispose(); toyota.dispose()
       return
     }
 
     // Stable references — never swap
     this.bmwCar      = bmw
     this.mercedesCar = mercedes
+    this.toyotaCar   = toyota
+    this.allCars     = [bmw, mercedes, toyota]
 
-    // Active car starts as BMW; the other is parked
+    // Active car starts as BMW; the others are parked
     this.car = bmw; this.parkedCar = mercedes
 
     // Wire crash sound + camera shake to physics impacts
@@ -217,8 +228,9 @@ export class GameEngine {
     }
     wireImpact(mercedes)
     wireImpact(bmw)
+    wireImpact(toyota)
 
-    // Orient both cars to face the Freedom Monument
+    // Orient all cars to face the Freedom Monument
     const facingHeading = (pos: THREE.Vector3) =>
       Math.atan2(monX - pos.x, monZ - pos.z)
     const setFacing = (body: typeof bmw.chassisBody, pos: THREE.Vector3) => {
@@ -228,12 +240,16 @@ export class GameEngine {
     }
     setFacing(bmw.chassisBody,      bmwPos)
     setFacing(mercedes.chassisBody, mercedesPos)
+    setFacing(toyota.chassisBody,   toyotaPos)
 
-    // Both cars parked at start — player spawns on foot between them to choose
-    this.car.chassisBody.sleep()
-    this.parkedCar.chassisBody.sleep()
-    const playerStart = new THREE.Vector3(this.spawnCx, 1.0, this.spawnCz)
-    this.player = new Player(this.scene, this.physicsWorld, playerStart, this.spawnHeading)
+    // All cars parked at start — player spawns 10m behind cars so all 3 are visible
+    for (const c of this.allCars) c.chassisBody.sleep()
+    this.playerSpawnPos = new THREE.Vector3(
+      this.spawnCx - toMonNx * 10,
+      1.0,
+      this.spawnCz - toMonNz * 10,
+    )
+    this.player = new Player(this.scene, this.physicsWorld, this.playerSpawnPos.clone(), this.spawnHeading)
     this.gameMode = 'onfoot'
 
     // ─── Resize ───────────────────────────────────────────────────────────────
@@ -262,6 +278,10 @@ export class GameEngine {
           this.exitCar()
         }
       }
+      // Clean up stale remote players on disconnect so reconnect starts fresh
+      this.network.onDisconnected = () => {
+        for (const [id] of this.remotePlayers) this.removeRemotePlayer(id)
+      }
       this.network.connect(nickname.trim())
     }
 
@@ -284,7 +304,7 @@ export class GameEngine {
   private updateRemoteCars() {
     for (const state of this.remoteStates.values()) {
       if (state.mode !== 'driving' || !state.carId) continue
-      const car = state.carId === 'bmw' ? this.bmwCar : this.mercedesCar
+      const car = state.carId === 'bmw' ? this.bmwCar : state.carId === 'toyota' ? this.toyotaCar : this.mercedesCar
       // Never override a car the local player is currently driving
       if (car === this.car && this.gameMode === 'driving') continue
       car.chassisBody.position.set(state.pos[0], state.pos[1], state.pos[2])
@@ -296,7 +316,7 @@ export class GameEngine {
 
   private getLocalCarId(): string | null {
     if (this.gameMode !== 'driving') return null
-    return this.car === this.bmwCar ? 'bmw' : 'mercedes'
+    return this.car === this.bmwCar ? 'bmw' : this.car === this.toyotaCar ? 'toyota' : 'mercedes'
   }
 
   private getRemoteDriverOf(carId: string): string | null {
@@ -381,9 +401,8 @@ export class GameEngine {
 
     // ── On-foot mode ─────────────────────────────────────────────────────────
     if (this.gameMode === 'onfoot' && this.player) {
-      // Keep parked car meshes in sync with their physics bodies
-      this.car.syncVisual()
-      this.parkedCar.syncVisual()
+      // Keep all car meshes in sync with their physics bodies
+      for (const c of this.allCars) c.syncVisual()
 
       this.player.update(input, dt)
       const pPos = this.player.getPosition()
@@ -396,7 +415,7 @@ export class GameEngine {
 
       this.lastHUDState = {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
-        state: this.state, carType: this.car instanceof BMW ? 'bmw' : 'mercedes', onFoot: true,
+        state: this.state, carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : 'mercedes', onFoot: true,
         playerPos: currentPlayerPos, playerHeading: currentHeading,
         minimapCanvas: this.map.minimapCanvas ?? undefined,
       }
@@ -470,7 +489,7 @@ export class GameEngine {
 
     // Low-pass filter the Y axis only — kills suspension bounce, preserves hill-following
     if (!this.smoothCarYInit) { this.smoothCarY = rawCarPos.y; this.smoothCarYInit = true }
-    this.smoothCarY += (rawCarPos.y - this.smoothCarY) * Math.min(1, dt * 4)
+    this.smoothCarY += (rawCarPos.y - this.smoothCarY) * Math.min(1, dt * 14)
     const carPos = new THREE.Vector3(rawCarPos.x, this.smoothCarY, rawCarPos.z)
 
     const carFwd = this.car.getForwardVector()
@@ -500,7 +519,7 @@ export class GameEngine {
       gear,
       damage: this.car.damage,
       state: this.state,
-      carType: this.car instanceof BMW ? 'bmw' : 'mercedes',
+      carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : 'mercedes',
       onFoot: false,
       playerPos: currentPlayerPos,
       playerHeading: currentHeading,
@@ -565,26 +584,28 @@ export class GameEngine {
     if (!this.player) return
     const pPos = this.player.getPosition()
 
-    // Check proximity to both cars — enter whichever is closest within range
-    const distActive = pPos.distanceTo(this.car.getPosition())
-    const distParked = pPos.distanceTo(this.parkedCar.getPosition())
-    const closest    = distActive <= distParked ? this.car : this.parkedCar
-    const closestDist = Math.min(distActive, distParked)
+    // Find the closest car among all three
+    let closest: Car = this.allCars[0]
+    let closestDist = Infinity
+    for (const c of this.allCars) {
+      const d = pPos.distanceTo(c.getPosition())
+      if (d < closestDist) { closestDist = d; closest = c }
+    }
     if (closestDist > 5) return
 
     // If a remote player is driving this car, carjack them (they get force-ejected)
-    const closestCarId = closest === this.bmwCar ? 'bmw' : 'mercedes'
+    const closestCarId = closest === this.bmwCar ? 'bmw' : closest === this.toyotaCar ? 'toyota' : 'mercedes'
     const remoteDriverId = this.getRemoteDriverOf(closestCarId)
     if (remoteDriverId) {
       this.network?.sendCarjack(remoteDriverId, closestCarId)
-      // Optimistically clear their occupancy so updateRemoteCars stops overriding the car
       const rs = this.remoteStates.get(remoteDriverId)
       if (rs) this.remoteStates.set(remoteDriverId, { ...rs, mode: 'onfoot', carId: null })
     }
 
-    // Swap active/parked if entering the parked car
-    if (closest === this.parkedCar) {
-      const tmp = this.car; this.car = this.parkedCar; this.parkedCar = tmp
+    // Make this the active car; the previous active becomes parked
+    if (closest !== this.car) {
+      this.parkedCar = this.car
+      this.car = closest
     }
 
     this.player.dispose()
@@ -597,32 +618,44 @@ export class GameEngine {
   }
 
   resetCar() {
-    // Reset both cars to their original side-by-side positions in front of Old Town Hall
-    this.bmwCar.reset(this.bmwSpawnPos.clone())
-    this.mercedesCar.reset(this.merSpawnPos.clone())
+    const isMultiplayer = this.network?.connected
 
-    // Orient cars toward monument
-    const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
-      const h = Math.atan2(-137 - pos.x, -136 - pos.z)
-      body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
-      body.previousQuaternion.copy(body.quaternion)
+    if (isMultiplayer) {
+      // ── Multiplayer respawn: only reset the local player, leave cars where they are ──
+      // Other players may be driving cars, so we can't teleport them.
+      if (this.gameMode === 'driving') {
+        // Clear damage on the car the player was driving
+        this.car.damage = 0
+        this.car.chassisBody.sleep()
+        this.car.setHeadlights(false)
+      }
+    } else {
+      // ── Singleplayer respawn: reset all cars to original positions ──
+      const spawnPairs: [Car, THREE.Vector3][] = [
+        [this.bmwCar,      this.bmwSpawnPos],
+        [this.mercedesCar, this.merSpawnPos],
+        [this.toyotaCar,   this.toySpawnPos],
+      ]
+      const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
+        const h = Math.atan2(-137 - pos.x, -136 - pos.z)
+        body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
+        body.previousQuaternion.copy(body.quaternion)
+      }
+      for (const [car, pos] of spawnPairs) {
+        car.reset(pos.clone())
+        setQ(car.chassisBody, pos)
+        car.damage = 0
+        car.chassisBody.sleep()
+      }
     }
-    setQ(this.bmwCar.chassisBody,      this.bmwSpawnPos)
-    setQ(this.mercedesCar.chassisBody, this.merSpawnPos)
 
-    this.bmwCar.damage      = 0
-    this.mercedesCar.damage = 0
     this.smoothCarYInit = false
 
-    // Respawn player on foot between the cars, facing monument
+    // Respawn player on foot at spawn location, facing monument
     if (this.player) { this.player.dispose(); this.player = null }
-    const playerStart = new THREE.Vector3(this.spawnCx, 1.0, this.spawnCz)
-    this.player = new Player(this.scene, this.physicsWorld, playerStart, this.spawnHeading)
+    this.player = new Player(this.scene, this.physicsWorld, this.playerSpawnPos.clone(), this.spawnHeading)
     this.gameMode = 'onfoot'
-
-    // Park both cars
-    this.bmwCar.chassisBody.sleep()
-    this.mercedesCar.chassisBody.sleep()
+    this.soundSystem.stopEngineKey()
 
     this.cameraSystem.reset()
     this.state = 'playing'

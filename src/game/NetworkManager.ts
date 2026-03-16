@@ -6,7 +6,7 @@ export interface LocalState {
   vel: [number, number, number]
   mode: 'driving' | 'onfoot'
   speedKmh: number
-  carId: string | null   // 'bmw' | 'mercedes' | null
+  carId: string | null   // 'bmw' | 'mercedes' | 'toyota' | null
 }
 
 export interface RemotePlayerData {
@@ -29,6 +29,17 @@ export interface ChatMessage {
 export class NetworkManager {
   private ws: WebSocket | null = null
   private localId: string | null = null
+  private nickname = ''
+  private url = ''
+  private destroyed = false
+
+  // Auto-reconnect state
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectDelay = 1000  // starts at 1s, doubles up to 16s
+  private readonly MAX_RECONNECT_DELAY = 16000
+
+  // Heartbeat
+  private pingInterval: ReturnType<typeof setInterval> | null = null
 
   onPlayerJoined?: (data: RemotePlayerData) => void
   onPlayerLeft?: (id: string) => void
@@ -36,19 +47,37 @@ export class NetworkManager {
   onChat?: (msg: ChatMessage) => void
   onConnected?: (id: string, existing: RemotePlayerData[]) => void
   onCarjack?: (carId: string) => void
+  onDisconnected?: () => void
 
   connect(nickname: string) {
+    this.nickname = nickname
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = (import.meta.env.VITE_WS_URL as string | undefined)
+    this.url = (import.meta.env.VITE_WS_URL as string | undefined)
       ?? (import.meta.env.DEV
         ? `ws://${location.hostname}:3001`
         : `${proto}://${location.host}/ws`)
 
-    console.log(`[Network] Connecting to ${url}`)
-    this.ws = new WebSocket(url)
+    this._connect()
+  }
+
+  private _connect() {
+    if (this.destroyed) return
+
+    console.log(`[Network] Connecting to ${this.url}`)
+    try {
+      this.ws = new WebSocket(this.url)
+    } catch {
+      this._scheduleReconnect()
+      return
+    }
 
     this.ws.onopen = () => {
-      this.ws!.send(JSON.stringify({ type: 'join', nickname }))
+      console.log('[Network] Connected')
+      this.reconnectDelay = 1000 // reset backoff on success
+      this.ws!.send(JSON.stringify({ type: 'join', nickname: this.nickname }))
+
+      // Start heartbeat — keeps the connection alive and detects dead sockets
+      this._startHeartbeat()
     }
 
     this.ws.onmessage = (e) => {
@@ -70,10 +99,42 @@ export class NetworkManager {
       } else if (msg.type === 'carjack') {
         this.onCarjack?.(msg.carId as string)
       }
+      // pong is silently consumed
     }
 
-    this.ws.onerror = () => console.warn('[Network] Connection failed — running offline')
-    this.ws.onclose = () => console.log('[Network] Disconnected')
+    this.ws.onerror = () => {
+      console.warn('[Network] Connection error')
+    }
+
+    this.ws.onclose = () => {
+      console.log('[Network] Disconnected')
+      this._stopHeartbeat()
+      this.onDisconnected?.()
+      this._scheduleReconnect()
+    }
+  }
+
+  private _scheduleReconnect() {
+    if (this.destroyed || this.reconnectTimer) return
+    console.log(`[Network] Reconnecting in ${this.reconnectDelay / 1000}s...`)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this._connect()
+    }, this.reconnectDelay)
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.MAX_RECONNECT_DELAY)
+  }
+
+  private _startHeartbeat() {
+    this._stopHeartbeat()
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'ping' }))
+      }
+    }, 15000) // ping every 15s
+  }
+
+  private _stopHeartbeat() {
+    if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null }
   }
 
   sendState(state: LocalState) {
@@ -98,6 +159,9 @@ export class NetworkManager {
   get connected() { return this.ws?.readyState === WebSocket.OPEN }
 
   destroy() {
+    this.destroyed = true
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
+    this._stopHeartbeat()
     this.ws?.close()
     this.ws = null
   }
