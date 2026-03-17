@@ -32,6 +32,7 @@ export class NetworkManager {
   private nickname = ''
   private url = ''
   private destroyed = false
+  private _lastStates: RemotePlayerData[] = []
 
   // Auto-reconnect state
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -48,6 +49,8 @@ export class NetworkManager {
   onConnected?: (id: string, existing: RemotePlayerData[]) => void
   onCarjack?: (carId: string) => void
   onRestart?: () => void
+  onVoice?: (id: string, nickname: string, data: ArrayBuffer) => void
+  onVoiceSpeaking?: (id: string, nickname: string, speaking: boolean) => void
   onDisconnected?: () => void
 
   connect(nickname: string) {
@@ -81,7 +84,22 @@ export class NetworkManager {
       this._startHeartbeat()
     }
 
+    this.ws.binaryType = 'arraybuffer'
+
     this.ws.onmessage = (e) => {
+      // Binary = voice audio data
+      if (e.data instanceof ArrayBuffer) {
+        // First 36 bytes = sender UUID, rest = audio
+        const decoder = new TextDecoder()
+        const idBytes = new Uint8Array(e.data, 0, 36)
+        const senderId = decoder.decode(idBytes)
+        if (senderId === this.localId) return
+        const audioData = e.data.slice(36)
+        const player = this._lastStates?.find(p => p.id === senderId)
+        this.onVoice?.(senderId, player?.nickname ?? 'Unknown', audioData)
+        return
+      }
+
       let msg: Record<string, unknown>
       try { msg = JSON.parse(e.data) } catch { return }
 
@@ -94,6 +112,7 @@ export class NetworkManager {
         this.onPlayerLeft?.(msg.id as string)
       } else if (msg.type === 'states') {
         const all = msg.players as RemotePlayerData[]
+        this._lastStates = all
         this.onStates?.(all.filter(p => p.id !== this.localId))
       } else if (msg.type === 'chat') {
         this.onChat?.(msg as unknown as ChatMessage)
@@ -101,6 +120,10 @@ export class NetworkManager {
         this.onCarjack?.(msg.carId as string)
       } else if (msg.type === 'restart') {
         this.onRestart?.()
+      } else if (msg.type === 'voice_start') {
+        this.onVoiceSpeaking?.(msg.id as string, msg.nickname as string, true)
+      } else if (msg.type === 'voice_stop') {
+        this.onVoiceSpeaking?.(msg.id as string, msg.nickname as string, false)
       }
       // pong is silently consumed
     }
@@ -161,6 +184,30 @@ export class NetworkManager {
   sendRestart() {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'restart' }))
+    }
+  }
+
+  sendVoice(blob: Blob) {
+    if (this.ws?.readyState !== WebSocket.OPEN || !this.localId) return
+    // Prepend our ID (36 bytes) so server can broadcast with sender info
+    const idBytes = new TextEncoder().encode(this.localId)
+    blob.arrayBuffer().then(audio => {
+      const combined = new Uint8Array(36 + audio.byteLength)
+      combined.set(idBytes)
+      combined.set(new Uint8Array(audio), 36)
+      this.ws!.send(combined.buffer)
+    })
+  }
+
+  sendVoiceStart() {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'voice_start' }))
+    }
+  }
+
+  sendVoiceStop() {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'voice_stop' }))
     }
   }
 

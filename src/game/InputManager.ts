@@ -10,6 +10,7 @@ export interface InputState {
   exitEnterToggle: boolean // true only on the frame F is pressed
   sprint: boolean
   jump: boolean
+  voiceChat: boolean       // true while K is held
   mouseDx: number
   mouseDy: number
 }
@@ -59,7 +60,7 @@ export class InputManager {
       return {
         throttle: 0, brake: 0, steering: 0, handbrake: false, honk: false,
         lookBack: false, cameraToggle: false, pauseToggle: false,
-        exitEnterToggle: false, sprint: false, jump: false, mouseDx: 0, mouseDy: 0,
+        exitEnterToggle: false, sprint: false, jump: false, voiceChat: false, mouseDx: 0, mouseDy: 0,
       }
     }
 
@@ -88,6 +89,7 @@ export class InputManager {
     const exitEnterToggle = this.justPressed('KeyF')
     const sprint = this.key('Space')
     const jump   = this.key('ShiftLeft', 'ShiftRight')
+    const voiceChat = this.key('KeyK')
 
     // Snapshot keys for next frame's justPressed check
     this.prevKeys = new Set(this.keys)
@@ -110,6 +112,7 @@ export class InputManager {
       exitEnterToggle,
       sprint,
       jump,
+      voiceChat,
       mouseDx,
       mouseDy,
     }

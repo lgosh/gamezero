@@ -15,6 +15,7 @@ import type { Car } from './entities/Car'
 import { NetworkManager } from './NetworkManager'
 import type { RemotePlayerData, ChatMessage } from './NetworkManager'
 import { RemotePlayer } from './RemotePlayer'
+import { VoiceChat } from './VoiceChat'
 
 export type CarType = 'bmw' | 'mercedes' | 'toyota' | 'bmwcs'
 export type GameState = 'loading' | 'playing' | 'paused' | 'crashed'
@@ -32,6 +33,7 @@ export interface HUDState {
   playerHeading?: number
   minimapCanvas?: HTMLCanvasElement
   remotePlayers?: { x: number; z: number }[]
+  voiceSpeakers?: string[]  // nicknames of players currently speaking
 }
 
 export class GameEngine {
@@ -93,8 +95,14 @@ export class GameEngine {
   private networkSendTimer = 0
   onChatMessage?: (msg: ChatMessage) => void
 
+  // Voice chat
+  private voiceChat: VoiceChat | null = null
+  private voiceSpeakers = new Set<string>()  // nicknames currently speaking
+  private localNickname = ''
+
   // Noclip (free camera fly mode)
   private noclipMode = false
+  private needsPauseRender = false
   private noclipPos = new THREE.Vector3()
   private noclipYaw = 0
   private noclipPitch = 0
@@ -289,11 +297,33 @@ export class GameEngine {
       this.network.onRestart = () => {
         this.performRestart()
       }
+      // Voice chat
+      this.network.onVoice = (id, _nickname, data) => {
+        this.voiceChat?.playRemoteAudio(id, data)
+      }
+      this.network.onVoiceSpeaking = (id, nickname, speaking) => {
+        if (speaking) {
+          this.voiceSpeakers.add(nickname)
+          this.voiceChat?.startRemoteSession(id)
+        } else {
+          this.voiceSpeakers.delete(nickname)
+          this.voiceChat?.endRemoteSession(id)
+        }
+      }
+
       // Clean up stale remote players on disconnect so reconnect starts fresh
       this.network.onDisconnected = () => {
         for (const [id] of this.remotePlayers) this.removeRemotePlayer(id)
       }
       this.network.connect(nickname.trim())
+
+      // Init voice chat
+      this.voiceChat = new VoiceChat(this.network)
+      this.localNickname = nickname.trim()
+      this.voiceChat.onLocalSpeaking = (speaking) => {
+        if (speaking) this.voiceSpeakers.add(this.localNickname)
+        else this.voiceSpeakers.delete(this.localNickname)
+      }
     }
 
     this.state = 'playing'
@@ -442,11 +472,19 @@ export class GameEngine {
       }
     }
 
+    // Voice chat — always update regardless of pause state
+    this.voiceChat?.update(input.voiceChat)
+
     if (this.state === 'playing') {
       this.update(dt, input)
+      this.renderer.render(this.scene, this.camera)
+    } else if (this.state === 'paused' || this.state === 'crashed') {
+      // Render once then stop — no need to burn GPU while paused
+      if (this.needsPauseRender) {
+        this.renderer.render(this.scene, this.camera)
+        this.needsPauseRender = false
+      }
     }
-
-    this.renderer.render(this.scene, this.camera)
   }
 
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
@@ -522,6 +560,7 @@ export class GameEngine {
         playerPos: currentPlayerPos, playerHeading: currentHeading,
         minimapCanvas: this.map.minimapCanvas ?? undefined,
         remotePlayers: remotePositions2,
+        voiceSpeakers: [...this.voiceSpeakers],
       }
       this.onHUDUpdate?.(this.lastHUDState)
 
@@ -615,6 +654,7 @@ export class GameEngine {
     // Crash check
     if (this.car.damage >= 1.0 && this.state !== 'crashed') {
       this.state = 'crashed'
+      this.needsPauseRender = true
       this.soundSystem.stopEngine()
     }
 
@@ -640,6 +680,7 @@ export class GameEngine {
       playerHeading: currentHeading,
       minimapCanvas: this.map.minimapCanvas ?? undefined,
       remotePlayers: remotePositions,
+      voiceSpeakers: [...this.voiceSpeakers],
     }
     this.onHUDUpdate?.(this.lastHUDState)
 
@@ -801,6 +842,7 @@ export class GameEngine {
   togglePause() {
     if (this.state === 'playing') {
       this.state = 'paused'
+      this.needsPauseRender = true
       this.clock.stop()
       this.soundSystem.pauseAll()
       this.onHUDUpdate?.({ ...this.lastHUDState, state: 'paused' })
@@ -856,6 +898,7 @@ export class GameEngine {
     this.soundSystem?.destroy()
     this.car?.dispose()
     this.parkedCar?.dispose()
+    this.voiceChat?.destroy()
     this.network?.destroy()
     for (const rp of this.remotePlayers.values()) rp.dispose()
     this.remotePlayers.clear()

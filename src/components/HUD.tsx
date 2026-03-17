@@ -395,7 +395,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div>Space — Sprint</div>
             <div>Shift — Jump</div>
             <div>F — Enter car</div>
-            <div className="border-t border-white/10 mt-1 pt-1">T — Chat</div>
+            <div className="border-t border-white/10 mt-1 pt-1">T — Chat &nbsp; K — Voice</div>
             <div className="text-white/50">P / ESC — Pause</div>
           </div>
         ) : (
@@ -406,11 +406,29 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div>Space — Handbrake</div>
             <div>H — Horn &nbsp; B — Look back</div>
             <div>C — Camera &nbsp; F — Exit car</div>
-            <div className="border-t border-white/10 mt-1 pt-1">T — Chat</div>
+            <div className="border-t border-white/10 mt-1 pt-1">T — Chat &nbsp; K — Voice</div>
             <div className="text-white/50">P / ESC — Pause</div>
           </div>
         )}
       </div>
+
+      {/* ── Voice chat speakers (CS 1.6 style) ──────────────────────────────── */}
+      {state.voiceSpeakers && state.voiceSpeakers.length > 0 && (
+        <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 pointer-events-none">
+          {state.voiceSpeakers.map((name) => (
+            <div
+              key={name}
+              className="flex items-center gap-2 px-3 py-1.5 rounded"
+              style={{ background: 'rgba(0,0,0,0.6)' }}
+            >
+              <div className="w-3 h-3 rounded-full bg-yellow-400 animate-pulse" />
+              <span className="text-white text-sm font-bold tracking-wide" style={{ fontFamily: 'Rajdhani, sans-serif' }}>
+                {name}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Pause overlay ─────────────────────────────────────────────────────── */}
       {state.state === 'paused' && (

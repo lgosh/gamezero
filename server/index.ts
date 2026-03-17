@@ -64,6 +64,15 @@ const server = Bun.serve<WSData>({
 
     message(ws, raw) {
       const id = ws.data.id
+
+      // Binary data = voice audio — relay to all other players as-is
+      if (typeof raw !== 'string') {
+        for (const [otherId, otherWs] of sockets) {
+          if (otherId !== id) otherWs.send(raw)
+        }
+        return
+      }
+
       let msg: Record<string, unknown>
       try { msg = JSON.parse(raw as string) } catch { return }
 
@@ -111,6 +120,13 @@ const server = Bun.serve<WSData>({
         if (!player) return
         broadcastAll({ type: 'restart', initiator: player.nickname })
         console.log(`[restart] ${player.nickname} triggered restart`)
+        return
+      }
+
+      if (msg.type === 'voice_start' || msg.type === 'voice_stop') {
+        const player = players.get(id)
+        if (!player) return
+        broadcast(id, { type: msg.type, id, nickname: player.nickname })
         return
       }
 
