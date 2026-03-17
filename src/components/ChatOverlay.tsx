@@ -64,7 +64,7 @@ export default function ChatOverlay({ messages, onSend, disabled }: ChatOverlayP
   const recent = messages.slice(-50)
 
   return (
-    <div className="absolute bottom-[340px] left-4 w-80 pointer-events-none select-none">
+    <div className="absolute bottom-[380px] left-4 w-80 pointer-events-none select-none">
       {/* Message history */}
       <div
         ref={listRef}

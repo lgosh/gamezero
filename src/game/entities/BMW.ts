@@ -19,6 +19,7 @@ export class BMW extends Car {
       suspensionCompression: 4.4,
       maxEngineForce: 6800,    // 315 HP naturally aspirated inline-6
       maxBrakeForce: 220,      // standard ventilated disc brakes
+      maxSpeedKmh: 250,        // electronic limiter
       maxSteeringAngle: 0.46,
       rollInfluence: 0.015,
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.42, 2.4),

@@ -13,6 +13,7 @@ export interface CarConfig {
   suspensionCompression: number
   maxEngineForce: number
   maxBrakeForce: number
+  maxSpeedKmh: number
   maxSteeringAngle: number
   rollInfluence: number
   // wheel offsets from chassis center (fallback if auto-detection fails)
@@ -291,11 +292,15 @@ export class Car {
 
     this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm))
 
+    // Speed limiter — taper engine force as speed approaches max
+    const speedRatio = this.speedKmh / this.config.maxSpeedKmh
+    const limiter = speedRatio < 0.85 ? 1.0 : Math.max(0, 1.0 - (speedRatio - 0.85) / 0.15)
+
     // Engine force — cannon-es convention: negative = forward, positive = backward
     const logicalForce =
       this.gearIndex === 0
         ? input.brake * maxEngineForce * 0.6   // reverse
-        : -input.throttle * maxEngineForce      // forward
+        : -input.throttle * maxEngineForce * limiter  // forward
 
     // Brake force — handbrake must NOT touch front wheels (kills drift momentum)
     const brakeF = input.handbrake

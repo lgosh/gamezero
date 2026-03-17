@@ -19,6 +19,7 @@ export class Mercedes extends Car {
       suspensionCompression: 4.8,
       maxEngineForce: 9200,    // 612 HP twin-turbo V8, 850 Nm torque
       maxBrakeForce: 280,      // AMG high-performance composite brakes
+      maxSpeedKmh: 300,        // AMG Driver's Package
       maxSteeringAngle: 0.46,
       rollInfluence: 0.012,
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.45, 2.4),
