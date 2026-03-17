@@ -249,8 +249,8 @@ export class GameEngine {
     setFacing(toyota.chassisBody, toyotaPos)
     setFacing(bmwcs.chassisBody, bmwcsPos)
 
-    // All cars parked at start — player spawns 10m behind cars so all 3 are visible
-    for (const c of this.allCars) c.chassisBody.sleep()
+    // All cars parked at start — parking brake holds them in place
+    for (const c of this.allCars) c.applyParkingBrake()
     this.playerSpawnPos = new THREE.Vector3(
       this.spawnCx - toMonNx * 10,
       1.0,
@@ -450,6 +450,9 @@ export class GameEngine {
   }
 
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
+    // Apply parking brake to all unoccupied cars (prevents player pushing)
+    for (const c of this.allCars) c.applyParkingBrake()
+
     // Physics step (always runs — keeps remote players alive during noclip too)
     this.physicsWorld.step(dt)
     this.updateRemoteCars(dt)
@@ -688,13 +691,10 @@ export class GameEngine {
     // Stop the car gracefully before exiting
     this.car.chassisBody.velocity.set(0, 0, 0)
     this.car.chassisBody.angularVelocity.set(0, 0, 0)
-    for (let i = 0; i < this.car.vehicle.wheelInfos.length; i++) {
-      this.car.vehicle.applyEngineForce(0, i)
-      this.car.vehicle.setBrake(200, i)
-    }
+    this.car.occupied = false
+    this.car.applyParkingBrake()
 
     this.player = new Player(this.scene, this.physicsWorld, spawnPos, heading)
-    this.car.chassisBody.sleep()
     this.car.setHeadlights(false)
     this.soundSystem.stopEngineKey()
     this.gameMode = 'onfoot'
@@ -734,6 +734,7 @@ export class GameEngine {
     this.player.dispose()
     this.player = null
     this.car.chassisBody.wakeUp()
+    this.car.occupied = true
     this.car.setHeadlights(true)
     this.soundSystem.startEngine()
     this.gameMode = 'driving'
@@ -766,6 +767,7 @@ export class GameEngine {
       car.reset(pos.clone())
       setQ(car.chassisBody, pos)
       car.damage = 0
+      car.occupied = false
       car.setHeadlights(false)
       car.uncull()
       // Don't sleep — let cars fall to the ground from spawn height

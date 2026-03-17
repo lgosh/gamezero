@@ -58,6 +58,7 @@ export class Car {
   gear = 1
   damage = 0
   smokeEmitting = false
+  occupied = false
 
   /** Called on significant impacts — hook this up in GameEngine */
   onImpact?: (impactVelocity: number) => void
@@ -347,6 +348,19 @@ export class Car {
     const lateralSpeedMs = Math.abs(vel.x * worldRight.x + vel.y * worldRight.y + vel.z * worldRight.z)
 
     return { rpm: this.rpm, speedKmh: this.speedKmh, gear: this.gear, lateralSpeedMs }
+  }
+
+  /** Apply parking handbrake to unoccupied cars — prevents player pushing but cars can still knock them */
+  applyParkingBrake() {
+    if (this.occupied) return
+    if (this.vehicle.wheelInfos.length < 4) return
+
+    // Strong brake on all wheels — like a real parking brake
+    const parkBrake = this.config.maxBrakeForce * 10
+    for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+      this.vehicle.setBrake(parkBrake, i)
+      this.vehicle.applyEngineForce(0, i)
+    }
   }
 
   private autoShift() {
