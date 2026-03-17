@@ -19,7 +19,7 @@ export class BMWCS extends Car {
       suspensionCompression: 5.0,
       maxEngineForce: 9500,    // 635 HP twin-turbo V8
       maxBrakeForce: 300,      // carbon-ceramic brakes
-      maxSpeedKmh: 305,        // limiter removed on CS
+      maxSpeedKmh: 330,        // tuned so equilibrium ≈ 305 km/h (real CS top speed)
       maxSteeringAngle: 0.44,
       rollInfluence: 0.010,    // lower CG, less roll
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.42, 2.4),

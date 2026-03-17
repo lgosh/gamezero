@@ -19,7 +19,7 @@ export class Toyota extends Car {
       suspensionCompression: 4.2,
       maxEngineForce: 4500,    // 222 HP hybrid — slower acceleration than sport sedans
       maxBrakeForce: 200,      // regenerative + disc brakes
-      maxSpeedKmh: 180,        // CVT-limited SUV top speed
+      maxSpeedKmh: 195,        // tuned so equilibrium ≈ 180 km/h (real RAV4 top speed)
       maxSteeringAngle: 0.52,  // tighter turning circle for SUV
       rollInfluence: 0.025,    // slightly more body roll (taller CG)
       chassisHalfExtents: new CANNON.Vec3(1.1, 0.55, 2.35),

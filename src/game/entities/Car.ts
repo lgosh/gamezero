@@ -292,9 +292,9 @@ export class Car {
 
     this.rpm = Math.max(idleRPM, Math.min(maxRPM, this.rpm))
 
-    // Speed limiter — hard cut engine force at max speed
+    // Speed limiter — smooth taper as speed approaches max (realistic power falloff)
     const speedRatio = this.speedKmh / this.config.maxSpeedKmh
-    const limiter = speedRatio < 0.98 ? 1.0 : Math.max(0, 1.0 - (speedRatio - 0.98) / 0.02)
+    const limiter = speedRatio < 0.85 ? 1.0 : Math.max(0, 1.0 - (speedRatio - 0.85) / 0.15)
 
     // Engine force — cannon-es convention: negative = forward, positive = backward
     const logicalForce =
