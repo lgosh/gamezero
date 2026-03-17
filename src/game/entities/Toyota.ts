@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { Car } from './Car'
 import type { PhysicsWorld } from '../PhysicsWorld'
-import { loadCarModel, extractWheels, mergeBodyGeometry } from './ModelLoader'
+import { loadCarModel, extractWheels, mergeBodyGeometry, mergeWheelGroups } from './ModelLoader'
 
 /** 2023 Toyota RAV4 Hybrid — loaded from /models/toyota.glb */
 export class Toyota extends Car {
@@ -42,6 +42,7 @@ export class Toyota extends Car {
     const { bodyGroup } = await loadCarModel('/models/toyota.glb', 4.60)
 
     const { groups, positions } = extractWheels(bodyGroup, this.scene, 'toyota')
+    mergeWheelGroups(groups)
     this.wheelMeshes = groups
     mergeBodyGeometry(bodyGroup)
 

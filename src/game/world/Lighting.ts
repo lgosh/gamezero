@@ -3,6 +3,7 @@ import * as THREE from 'three'
 export interface LightingController {
   setMode: (mode: 'day' | 'night') => void
   getMode: () => 'day' | 'night'
+  setShadowCenter: (x: number, z: number) => void
 }
 
 export function setupLighting(scene: THREE.Scene): LightingController {
@@ -27,18 +28,9 @@ export function setupLighting(scene: THREE.Scene): LightingController {
   // Sun (directional) — Warm San Andreas Golden Hour
   const sun = new THREE.DirectionalLight(0xffd27d, 3.2)
   sun.position.set(120, 250, 80)
-  sun.castShadow = true
-  sun.shadow.mapSize.width = 2048
-  sun.shadow.mapSize.height = 2048
-  sun.shadow.camera.near = 1
-  sun.shadow.camera.far = 500
-  sun.shadow.camera.left = -200
-  sun.shadow.camera.right = 200
-  sun.shadow.camera.top = 200
-  sun.shadow.camera.bottom = -200
-  sun.shadow.bias = -0.0001
-  sun.shadow.normalBias = 0.05
+  sun.castShadow = false
   scene.add(sun)
+  scene.add(sun.target)
 
   // Fill light (bounce off buildings)
   const fill = new THREE.DirectionalLight(0xffaa44, 0.8)
@@ -50,6 +42,11 @@ export function setupLighting(scene: THREE.Scene): LightingController {
   scene.add(ambient)
 
   return {
+    setShadowCenter: (x: number, z: number) => {
+      sun.target.position.set(x, 0, z)
+      sun.target.updateMatrixWorld()
+      sun.shadow.camera.updateProjectionMatrix()
+    },
     setMode: (newMode) => {
       mode = newMode
       if (mode === 'day') {
@@ -106,7 +103,7 @@ export function createStreetLamp(
   // Pole
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 8.5, 8), poleMat)
   pole.position.set(0, 4.25, 0)
-  pole.castShadow = true
+  pole.castShadow = false
   group.add(pole)
 
   // Arm

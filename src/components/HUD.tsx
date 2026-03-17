@@ -379,7 +379,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div className="text-white/50 text-sm mb-6">Press ESC to resume</div>
             <div className="flex flex-col gap-2">
               <button onClick={onPause} className="w-full px-6 py-3 bg-white/15 hover:bg-white/25 text-white font-bold rounded tracking-wider transition-colors">▶ RESUME</button>
-              <button onClick={onReset} className="w-full px-6 py-3 bg-white/10 hover:bg-white/20 text-white/80 font-bold rounded tracking-wider transition-colors">↺ RESPAWN</button>
+              <button onClick={onReset} className="w-full px-6 py-3 bg-white/10 hover:bg-white/20 text-white/80 font-bold rounded tracking-wider transition-colors">↺ RESTART</button>
               <div className="border-t border-white/10 my-1" />
               <button onClick={onMuteToggle} className="w-full px-6 py-2.5 bg-white/07 hover:bg-white/15 text-white/70 font-bold rounded tracking-wider transition-colors text-sm">
                 {muted ? '🔇 Unmute Sound' : '🔊 Sound On'}
@@ -403,7 +403,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div className="text-red-400 text-5xl font-bold mb-2 tracking-widest">TOTALED</div>
             <div className="text-white/60 text-base mb-2">Your car is destroyed</div>
             <div className="text-white/40 text-sm mb-6">Freedom Square, Tbilisi</div>
-            <button onClick={onReset} className="px-8 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded tracking-wider transition-colors">RESPAWN</button>
+            <button onClick={onReset} className="px-8 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded tracking-wider transition-colors">RESTART</button>
           </div>
         </div>
       )}

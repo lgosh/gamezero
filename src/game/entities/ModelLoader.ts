@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import * as CANNON from 'cannon-es'
 
 export interface LoadedCarModel {
@@ -381,14 +381,61 @@ export function mergeBodyGeometry(bodyGroup: THREE.Group): void {
 
   toRemove.forEach((m) => m.parent?.remove(m))
 
-  for (const { mat, geoms, castShadow } of buckets.values()) {
+  for (const { mat, geoms } of buckets.values()) {
     if (geoms.length === 0) continue
     let merged: THREE.BufferGeometry | null = null
     try { merged = mergeGeometries(geoms) } catch { merged = geoms[0] }
     if (!merged) continue
+    // Deduplicate vertices — Sketchfab models often have many shared verts stored separately
+    try { merged = mergeVertices(merged) } catch { /* keep original if dedup fails */ }
+    merged.computeBoundingSphere()
     const m = new THREE.Mesh(merged, mat)
-    m.castShadow = castShadow
-    m.receiveShadow = true
+    m.castShadow = false  // cars move through shadows, don't cast them
+    m.receiveShadow = false
     bodyGroup.add(m)
+  }
+}
+
+/**
+ * Merge meshes within each wheel group by material.
+ * BMW M5 CS has ~450 meshes per wheel group — this collapses them to a handful.
+ * Wheel groups are positioned each frame by syncVisual(), so geometry must be
+ * in group-local space (already the case from extractWheels).
+ */
+export function mergeWheelGroups(groups: THREE.Group[]): void {
+  for (const group of groups) {
+    type Bucket = { mat: THREE.Material; geoms: THREE.BufferGeometry[] }
+    const buckets = new Map<string, Bucket>()
+    const toRemove: THREE.Mesh[] = []
+
+    group.traverse((obj) => {
+      const mesh = obj as THREE.Mesh
+      if (!mesh.isMesh) return
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      if (mats.length > 1) return
+      const mat = mats[0]
+      if (!mat) return
+      const attrSig = Object.keys(mesh.geometry.attributes).sort().join(',')
+      const key = `${mat.uuid}|${attrSig}`
+      // Geometry is already in group-local space (extractWheels centered it at origin)
+      if (!buckets.has(key)) buckets.set(key, { mat, geoms: [] })
+      buckets.get(key)!.geoms.push(mesh.geometry.clone())
+      toRemove.push(mesh)
+    })
+
+    toRemove.forEach((m) => m.parent?.remove(m))
+
+    for (const { mat, geoms } of buckets.values()) {
+      if (geoms.length === 0) continue
+      let merged: THREE.BufferGeometry | null = null
+      try { merged = mergeGeometries(geoms) } catch { merged = geoms[0] }
+      if (!merged) continue
+      try { merged = mergeVertices(merged) } catch { /* keep original if dedup fails */ }
+      merged.computeBoundingSphere()
+      const m = new THREE.Mesh(merged, mat)
+      m.castShadow = false
+      m.receiveShadow = false
+      group.add(m)
+    }
   }
 }

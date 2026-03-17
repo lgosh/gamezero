@@ -106,6 +106,14 @@ const server = Bun.serve<WSData>({
         return
       }
 
+      if (msg.type === 'restart') {
+        const player = players.get(id)
+        if (!player) return
+        broadcastAll({ type: 'restart', initiator: player.nickname })
+        console.log(`[restart] ${player.nickname} triggered restart`)
+        return
+      }
+
       if (msg.type === 'chat') {
         const player = players.get(id)
         if (!player) return

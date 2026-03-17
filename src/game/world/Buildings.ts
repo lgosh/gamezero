@@ -120,7 +120,7 @@ export function addBuilding(
         colMat
       )
       col.position.set(-config.width / 2 + colSpacing * (i + 1), config.height / 2, config.depth / 2 + 0.1)
-      col.castShadow = true
+      col.castShadow = false
       group.add(col)
     }
   } else if (config.style === 'georgian') {
@@ -133,7 +133,7 @@ export function addBuilding(
         balconyMat
       )
       bal.position.set(0, f * 3.2 + 0.06, config.depth / 2 + 0.7)
-      bal.castShadow = true
+      bal.castShadow = false
       group.add(bal)
     }
   } else if (config.style === 'soviet') {

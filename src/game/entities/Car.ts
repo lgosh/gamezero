@@ -43,6 +43,11 @@ export class Car {
   vehicle!: CANNON.RaycastVehicle
   chassisBody!: CANNON.Body
 
+  // Draw distance: mesh hidden + body sleeping when far from all players
+  culled = false
+  /** When true, syncVisual uses interpolated physics for smoother rendering */
+  useInterpolatedSync = false
+
   // Set false to disable all damage (walls, crashes, etc.)
   static damageEnabled = false
 
@@ -163,8 +168,11 @@ export class Car {
     // Determine which body we hit
     const otherBody = contact.bi === this.chassisBody ? contact.bj : contact.bi
     const isSoft = (otherBody as any).__soft === true
+    const isGround = (otherBody as any).__ground === true
     // Prop bodies (lamps, benches) use propMaterial and barely register
     const isProp = otherBody.mass > 0  // dynamic = prop
+
+    if (isGround) return
 
     if (isSoft) {
       // Trees: only apply tiny scratch damage at very high speeds
@@ -325,7 +333,7 @@ export class Car {
     }
 
     // Sync visual mesh to physics
-    this.syncVisual()
+    this.syncVisual(this.useInterpolatedSync)
 
     // Lateral slip — how fast the car is moving sideways relative to its heading
     const right = new CANNON.Vec3(1, 0, 0)
@@ -357,16 +365,21 @@ export class Car {
     }
   }
 
-  syncVisual() {
-    // Sync chassis mesh to physics body
-    const pos = this.chassisBody.position
-    const quat = this.chassisBody.quaternion
+  syncVisual(useInterpolated = false) {
+    const pos = useInterpolated ? this.chassisBody.interpolatedPosition : this.chassisBody.position
+    const quat = useInterpolated ? this.chassisBody.interpolatedQuaternion : this.chassisBody.quaternion
 
     this.group.position.set(pos.x, pos.y, pos.z)
     this.group.quaternion.set(quat.x, quat.y, quat.z, quat.w)
 
     // Offset the chassis mesh so it matches the physics shape's offset
-    this.chassisMesh.position.copy(this.config.chassisOffset)
+    const off = this.config.chassisOffset
+    this.chassisMesh.position.set(off.x, off.y, off.z)
+
+    // Compute translational delta to shift wheels when using interpolated chassis
+    const dx = useInterpolated ? pos.x - this.chassisBody.position.x : 0
+    const dy = useInterpolated ? pos.y - this.chassisBody.position.y : 0
+    const dz = useInterpolated ? pos.z - this.chassisBody.position.z : 0
 
     // Sync wheel meshes
     this.vehicle.wheelInfos.forEach((wheel, i) => {
@@ -374,7 +387,7 @@ export class Car {
       const t = wheel.worldTransform
       const wm = this.wheelMeshes[i]
       if (!wm) return
-      wm.position.set(t.position.x, t.position.y, t.position.z)
+      wm.position.set(t.position.x + dx, t.position.y + dy, t.position.z + dz)
       wm.quaternion.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
     })
   }
@@ -385,6 +398,28 @@ export class Car {
       this.chassisBody.position.y,
       this.chassisBody.position.z
     )
+  }
+
+  /** Interpolated position for camera — smooth between physics substeps */
+  getInterpolatedPosition(): THREE.Vector3 {
+    const p = this.chassisBody.interpolatedPosition
+    return new THREE.Vector3(p.x, p.y, p.z)
+  }
+
+  /** Interpolated forward for camera — smooth between physics substeps */
+  getInterpolatedForward(): THREE.Vector3 {
+    const forward = new CANNON.Vec3(0, 0, 1)
+    const worldForward = new CANNON.Vec3()
+    this.chassisBody.interpolatedQuaternion.vmult(forward, worldForward)
+    return new THREE.Vector3(worldForward.x, worldForward.y, worldForward.z).normalize()
+  }
+
+  /** Interpolated up for camera — smooth between physics substeps */
+  getInterpolatedUp(): THREE.Vector3 {
+    const up = new CANNON.Vec3(0, 1, 0)
+    const worldUp = new CANNON.Vec3()
+    this.chassisBody.interpolatedQuaternion.vmult(up, worldUp)
+    return new THREE.Vector3(worldUp.x, worldUp.y, worldUp.z).normalize()
   }
 
   getForwardVector(): THREE.Vector3 {
@@ -460,6 +495,22 @@ export class Car {
       dz.mesh.position.copy(dz.originalPos)
       dz.mesh.rotation.copy(dz.originalRot)
     }
+  }
+
+  /** Hide meshes and deactivate — used by draw distance system */
+  cull() {
+    if (this.culled) return
+    this.culled = true
+    this.group.visible = false
+    for (const wm of this.wheelMeshes) wm.visible = false
+  }
+
+  /** Show meshes and reactivate — used by draw distance system */
+  uncull() {
+    if (!this.culled) return
+    this.culled = false
+    this.group.visible = true
+    for (const wm of this.wheelMeshes) wm.visible = true
   }
 
   dispose() {

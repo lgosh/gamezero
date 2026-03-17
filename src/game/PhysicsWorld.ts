@@ -103,6 +103,7 @@ export class PhysicsWorld {
     })
     body.addShape(new CANNON.Plane())
     body.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2)
+    ;(body as any).__ground = true
     this.world.addBody(body)
     return body
   }

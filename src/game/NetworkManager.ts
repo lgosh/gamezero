@@ -47,6 +47,7 @@ export class NetworkManager {
   onChat?: (msg: ChatMessage) => void
   onConnected?: (id: string, existing: RemotePlayerData[]) => void
   onCarjack?: (carId: string) => void
+  onRestart?: () => void
   onDisconnected?: () => void
 
   connect(nickname: string) {
@@ -98,6 +99,8 @@ export class NetworkManager {
         this.onChat?.(msg as unknown as ChatMessage)
       } else if (msg.type === 'carjack') {
         this.onCarjack?.(msg.carId as string)
+      } else if (msg.type === 'restart') {
+        this.onRestart?.()
       }
       // pong is silently consumed
     }
@@ -152,6 +155,12 @@ export class NetworkManager {
   sendCarjack(targetId: string, carId: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'carjack', targetId, carId }))
+    }
+  }
+
+  sendRestart() {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'restart' }))
     }
   }
 

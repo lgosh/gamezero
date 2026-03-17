@@ -2,6 +2,12 @@ import * as THREE from 'three'
 
 export type CameraMode = 'chase' | 'cockpit' | 'hood'
 
+/** Frame-rate-independent smoothing factor. Unlike `dt * rate`, this produces
+ *  identical results regardless of frame rate (exponential decay). */
+function smoothStep(rate: number, dt: number): number {
+  return 1 - Math.exp(-rate * dt)
+}
+
 export class CameraSystem {
   private camera: THREE.PerspectiveCamera
   private currentPos = new THREE.Vector3()
@@ -64,9 +70,9 @@ export class CameraSystem {
 
       // Auto-return to default after idle
       if (this.mouseIdleTime > this.RETURN_DELAY) {
-        const returnSpeed = Math.min(1, dt * 2.5)
-        this.orbitYaw   *= (1 - returnSpeed)
-        this.orbitPitch *= (1 - returnSpeed)
+        const decay = Math.exp(-2.5 * dt)
+        this.orbitYaw   *= decay
+        this.orbitPitch *= decay
         if (Math.abs(this.orbitYaw)   < 0.001) this.orbitYaw   = 0
         if (Math.abs(this.orbitPitch) < 0.001) this.orbitPitch = 0
       }
@@ -81,7 +87,7 @@ export class CameraSystem {
       }
 
       // Tighter tracking at speed, looser at rest for cinematic feel
-      const dirSmooth = Math.min(1, dt * (speedKmh > 5 ? 8 : 4))
+      const dirSmooth = smoothStep(speedKmh > 5 ? 8 : 4, dt)
       this.smoothFollowDir.lerp(dir, dirSmooth)
       this.smoothFollowDir.normalize()
 
@@ -97,7 +103,7 @@ export class CameraSystem {
 
       // Look-at smooths slightly for cinematic feel
       const idealLookAt = carPos.clone().add(new THREE.Vector3(0, 0.8, 0))
-      this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 25))
+      this.currentLookAt.lerp(idealLookAt, smoothStep(25, dt))
 
     } else if (this.mode === 'cockpit') {
       const right = new THREE.Vector3().crossVectors(carUp, carForward).normalize()
@@ -146,8 +152,8 @@ export class CameraSystem {
       this.initialized = true
     }
 
-    this.currentPos.lerp(idealPos, Math.min(1, dt * 7))
-    this.currentLookAt.lerp(idealLookAt, Math.min(1, dt * 12))
+    this.currentPos.lerp(idealPos, smoothStep(7, dt))
+    this.currentLookAt.lerp(idealLookAt, smoothStep(12, dt))
 
     this.camera.position.copy(this.currentPos)
     this.camera.lookAt(this.currentLookAt)

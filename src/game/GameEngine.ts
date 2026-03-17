@@ -1,8 +1,4 @@
 import * as THREE from 'three'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import * as CANNON from 'cannon-es'
 import { PhysicsWorld } from './PhysicsWorld'
 import { InputManager } from './InputManager'
@@ -41,8 +37,8 @@ export class GameEngine {
   private scene!: THREE.Scene
   private camera!: THREE.PerspectiveCamera
   private renderer!: THREE.WebGLRenderer
-  private composer!: EffectComposer
   private clock!: THREE.Clock
+  private sun!: THREE.DirectionalLight
 
   private physicsWorld!: PhysicsWorld
   private inputManager!: InputManager
@@ -121,35 +117,17 @@ export class GameEngine {
       powerPreference: 'high-performance',
       stencil: false,
       depth: true,
-      logarithmicDepthBuffer: true,
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1))
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight)
-    this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.enabled = false
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.0
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
 
     // ─── Scene & Camera ───────────────────────────────────────────────────────
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(68, canvas.clientWidth / canvas.clientHeight, 0.3, 1500)
-
-    // ─── Post-processing ──────────────────────────────────────────────────────
-    this.composer = new EffectComposer(this.renderer)
-    const renderPass = new RenderPass(this.scene, this.camera)
-    this.composer.addPass(renderPass)
-
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(canvas.clientWidth, canvas.clientHeight),
-      0.18, // Reduced from 0.4
-      0.4,  // radius
-      0.9   // Increased threshold from 0.85
-    )
-    this.composer.addPass(bloomPass)
-
-    const outputPass = new OutputPass()
-    this.composer.addPass(outputPass)
+    this.camera = new THREE.PerspectiveCamera(68, canvas.clientWidth / canvas.clientHeight, 0.5, 800)
 
     // ─── Environment map — critical for realistic metallic car paint ───────────
     const pmrem = new THREE.PMREMGenerator(this.renderer)
@@ -224,6 +202,7 @@ export class GameEngine {
 
     // Active car starts as BMW; the others are parked
     this.car = bmw; this.parkedCar = mercedes
+    this.car.useInterpolatedSync = true
 
     // Wire crash sound + camera shake to physics impacts
     const wireImpact = (car: Car) => {
@@ -287,6 +266,10 @@ export class GameEngine {
         if (this.gameMode === 'driving' && this.getLocalCarId() === carId) {
           this.exitCar()
         }
+      }
+      // Another player (or us) triggered restart — reset everything
+      this.network.onRestart = () => {
+        this.performRestart()
       }
       // Clean up stale remote players on disconnect so reconnect starts fresh
       this.network.onDisconnected = () => {
@@ -363,6 +346,52 @@ export class GameEngine {
     return null
   }
 
+  private readonly DRAW_DIST_CULL = 200   // hide cars beyond this
+  private readonly DRAW_DIST_SHOW = 150   // re-show at this (hysteresis)
+
+  /** GTA-style draw distance: cull parked cars far from all players */
+  private updateDrawDistance() {
+    // Gather all "viewer" positions: local player + remote players
+    const viewers: { x: number; z: number }[] = []
+    if (this.gameMode === 'driving') {
+      const p = this.car.chassisBody.position
+      viewers.push({ x: p.x, z: p.z })
+    } else if (this.player) {
+      const p = this.player.getPosition()
+      viewers.push({ x: p.x, z: p.z })
+    }
+    for (const state of this.remoteStates.values()) {
+      viewers.push({ x: state.pos[0], z: state.pos[2] })
+    }
+
+    for (const car of this.allCars) {
+      // Never cull the car the local player is driving
+      if (car === this.car && this.gameMode === 'driving') {
+        car.uncull()
+        continue
+      }
+      // Never cull a car a remote player is driving
+      const carId = car === this.bmwCar ? 'bmw' : car === this.toyotaCar ? 'toyota' : car === this.bmwcsCar ? 'bmwcs' : 'mercedes'
+      if (this.getRemoteDriverOf(carId)) {
+        car.uncull()
+        continue
+      }
+
+      const cp = car.chassisBody.position
+      let minDist = Infinity
+      for (const v of viewers) {
+        const dx = cp.x - v.x, dz = cp.z - v.z
+        minDist = Math.min(minDist, dx * dx + dz * dz)
+      }
+      const threshold = car.culled ? this.DRAW_DIST_SHOW : this.DRAW_DIST_CULL
+      if (minDist > threshold * threshold) {
+        car.cull()
+      } else {
+        car.uncull()
+      }
+    }
+  }
+
   start() {
     if (this.destroyed) return  // user may have navigated away while model was loading
     this.soundSystem.init()
@@ -399,7 +428,7 @@ export class GameEngine {
       this.update(dt, input)
     }
 
-    this.composer.render()
+    this.renderer.render(this.scene, this.camera)
   }
 
   private update(dt: number, input: ReturnType<typeof this.inputManager.getState>) {
@@ -407,6 +436,7 @@ export class GameEngine {
     this.physicsWorld.step(dt)
     this.updateRemoteCars(dt)
     this.map.syncProps()
+    this.updateDrawDistance()
 
     // ── Noclip (free camera fly) ──────────────────────────────────────────
     if (this.noclipMode) {
@@ -436,10 +466,21 @@ export class GameEngine {
     let currentPlayerPos = { x: 0, z: 0 }
     let currentHeading = 0
 
+    // Move shadow camera to follow the player so the tight 80m coverage area tracks them
+    if (this.map?.lighting) {
+      const shadowX = this.gameMode === 'driving' && this.car
+        ? this.car.chassisBody.position.x
+        : this.player?.getPosition().x ?? 0
+      const shadowZ = this.gameMode === 'driving' && this.car
+        ? this.car.chassisBody.position.z
+        : this.player?.getPosition().z ?? 0
+      this.map.lighting.setShadowCenter(shadowX, shadowZ)
+    }
+
     // ── On-foot mode ─────────────────────────────────────────────────────────
     if (this.gameMode === 'onfoot' && this.player) {
-      // Keep all car meshes in sync with their physics bodies
-      for (const c of this.allCars) c.syncVisual()
+      // Keep all car meshes in sync with their physics bodies (skip culled)
+      for (const c of this.allCars) if (!c.culled) c.syncVisual()
 
       this.player.update(input, dt)
       const pPos = this.player.getPosition()
@@ -482,9 +523,9 @@ export class GameEngine {
     // Car update (physics inputs for driven car)
     const { rpm, speedKmh, gear, lateralSpeedMs } = this.car.update(input, dt)
 
-    // Sync visual meshes for ALL cars, so parked cars visually react if we crash into them
+    // Sync visual meshes for ALL cars (skip culled — they're hidden)
     for (const c of this.allCars) {
-      if (c !== this.car) c.syncVisual()
+      if (c !== this.car && !c.culled) c.syncVisual()
     }
 
     // Gear change sound — only for actual drive gears (≥2), not R or N
@@ -526,16 +567,16 @@ export class GameEngine {
     }
     this.particleSystem.update(dt)
 
-    // Camera
-    const rawCarPos = this.car.getPosition()
+    // Camera — use interpolated physics state for smooth visuals between substeps
+    const rawCarPos = this.car.getInterpolatedPosition()
 
     // Low-pass filter the Y axis only — kills suspension bounce, preserves hill-following
     if (!this.smoothCarYInit) { this.smoothCarY = rawCarPos.y; this.smoothCarYInit = true }
-    this.smoothCarY += (rawCarPos.y - this.smoothCarY) * Math.min(1, dt * 14)
+    this.smoothCarY += (rawCarPos.y - this.smoothCarY) * (1 - Math.exp(-14 * dt))
     const carPos = new THREE.Vector3(rawCarPos.x, this.smoothCarY, rawCarPos.z)
 
-    const carFwd = this.car.getForwardVector()
-    const carUp = this.car.getUpVector()
+    const carFwd = this.car.getInterpolatedForward()
+    const carUp = this.car.getInterpolatedUp()
     const v = this.car.chassisBody.velocity
     const carVel = new THREE.Vector3(v.x, v.y, v.z)
     this.cameraSystem.update(carPos, carFwd, carUp, carVel, speedKmh, dt, input.lookBack, input.mouseDx, input.mouseDy)
@@ -646,8 +687,10 @@ export class GameEngine {
 
     // Make this the active car; the previous active becomes parked
     if (closest !== this.car) {
+      this.car.useInterpolatedSync = false
       this.parkedCar = this.car
       this.car = closest
+      this.car.useInterpolatedSync = true
     }
 
     this.player.dispose()
@@ -660,36 +703,34 @@ export class GameEngine {
   }
 
   resetCar() {
-    const isMultiplayer = this.network?.connected
+    if (this.network?.connected) {
+      // Broadcast restart to all players — server echoes back to everyone
+      this.network.sendRestart()
+    }
+    // Always restart locally immediately (don't wait for server roundtrip)
+    this.performRestart()
+  }
 
-    if (isMultiplayer) {
-      // ── Multiplayer respawn: only reset the local player, leave cars where they are ──
-      // Other players may be driving cars, so we can't teleport them.
-      if (this.gameMode === 'driving') {
-        // Clear damage on the car the player was driving
-        this.car.damage = 0
-        this.car.chassisBody.sleep()
-        this.car.setHeadlights(false)
-      }
-    } else {
-      // ── Singleplayer respawn: reset all cars to original positions ──
-      const spawnPairs: [Car, THREE.Vector3][] = [
-        [this.bmwCar, this.bmwSpawnPos],
-        [this.mercedesCar, this.merSpawnPos],
-        [this.toyotaCar, this.toySpawnPos],
-        [this.bmwcsCar, this.bmwcsSpawnPos],
-      ]
-      const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
-        const h = Math.atan2(-137 - pos.x, -136 - pos.z)
-        body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
-        body.previousQuaternion.copy(body.quaternion)
-      }
-      for (const [car, pos] of spawnPairs) {
-        car.reset(pos.clone())
-        setQ(car.chassisBody, pos)
-        car.damage = 0
-        car.chassisBody.sleep()
-      }
+  private performRestart() {
+    // Reset all cars to original spawn positions
+    const spawnPairs: [Car, THREE.Vector3][] = [
+      [this.bmwCar, this.bmwSpawnPos],
+      [this.mercedesCar, this.merSpawnPos],
+      [this.toyotaCar, this.toySpawnPos],
+      [this.bmwcsCar, this.bmwcsSpawnPos],
+    ]
+    const setQ = (body: typeof this.bmwCar.chassisBody, pos: THREE.Vector3) => {
+      const h = Math.atan2(-137 - pos.x, -136 - pos.z)
+      body.quaternion.set(0, Math.sin(h / 2), 0, Math.cos(h / 2))
+      body.previousQuaternion.copy(body.quaternion)
+    }
+    for (const [car, pos] of spawnPairs) {
+      car.reset(pos.clone())
+      setQ(car.chassisBody, pos)
+      car.damage = 0
+      car.chassisBody.sleep()
+      car.setHeadlights(false)
+      car.uncull()
     }
 
     this.smoothCarYInit = false
@@ -762,7 +803,6 @@ export class GameEngine {
     const w = canvas.clientWidth
     const h = canvas.clientHeight
     this.renderer.setSize(w, h, false)
-    this.composer.setSize(w, h)
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
   }

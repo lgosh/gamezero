@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { PhysicsWorld } from '../PhysicsWorld'
 import { setupLighting, createStreetLamp, type LightingController } from './Lighting'
 import { loadOSM, type OSMWay } from './OSMLoader'
@@ -480,7 +480,7 @@ export class OSMMap {
       const bGeo = new THREE.ExtrudeGeometry(shape, { depth: parlH, bevelEnabled: false })
       bGeo.rotateX(-Math.PI / 2)
       const bMesh = new THREE.Mesh(bGeo, new THREE.MeshStandardMaterial({ color: 0xe8e0cc, roughness: 0.7 }))
-      bMesh.castShadow = bMesh.receiveShadow = true
+      bMesh.castShadow = false; bMesh.receiveShadow = true
       this.scene.add(bMesh)
       // Front facade faces south (+Z) toward Rustaveli — that's the edge at z≈-371
       const fallbackRing: Array<[number, number]> = [
@@ -568,7 +568,7 @@ export class OSMMap {
       geo.rotateX(-Math.PI / 2)
       geo.translate(0, y, 0)
       const mesh = new THREE.Mesh(geo, stoneMat)
-      mesh.castShadow = true
+      mesh.castShadow = false
       this.scene.add(mesh)
     }
 
@@ -744,7 +744,7 @@ export class OSMMap {
     }
     const mergedCols = mergeGeometries(colGeos, false)
     if (mergedCols) {
-      const m = new THREE.Mesh(mergedCols, colMat); m.castShadow = true; this.scene.add(m)
+      const m = new THREE.Mesh(mergedCols, colMat); m.castShadow = false; this.scene.add(m)
     }
     for (const g of colGeos) g.dispose()
 
@@ -753,7 +753,7 @@ export class OSMMap {
     const entab = new THREE.Mesh(new THREE.BoxGeometry(entabW, 1.4, 1.8), stoneMat)
     entab.position.set(ax + dx * 0.5 + nx * 3, colH + 0.7, az + dz * 0.5 + nz * 3)
     entab.rotation.y = Math.atan2(nx, nz)
-    entab.castShadow = true
+    entab.castShadow = false
     this.scene.add(entab)
 
     // Steps (5 wide treads stepping outward)
@@ -772,10 +772,10 @@ export class OSMMap {
 
     // Dome drum + hemisphere
     const drum = new THREE.Mesh(new THREE.CylinderGeometry(7, 8.5, 4.5, 20), domeMat)
-    drum.position.set(cx, height - 1, cz); drum.castShadow = true; this.scene.add(drum)
+    drum.position.set(cx, height - 1, cz); drum.castShadow = false; this.scene.add(drum)
     const domeGeo = new THREE.SphereGeometry(7.5, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2)
     const dome = new THREE.Mesh(domeGeo, domeMat)
-    dome.position.set(cx, height + 3, cz); dome.castShadow = true; this.scene.add(dome)
+    dome.position.set(cx, height + 3, cz); dome.castShadow = false; this.scene.add(dome)
 
     // Gold lantern on dome
     const lantern = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2.1, 3, 12), goldMat)
@@ -848,7 +848,7 @@ export class OSMMap {
     const stoneMat = new THREE.MeshStandardMaterial({ color: 0xe8e0d0, roughness: 0.8 })
     const goldMat  = new THREE.MeshStandardMaterial({ color: 0xd4a020, metalness: 0.6, roughness: 0.4 })
 
-    const add = (mesh: THREE.Mesh) => { mesh.castShadow = true; this.scene.add(mesh) }
+    const add = (mesh: THREE.Mesh) => { mesh.castShadow = false; this.scene.add(mesh) }
 
     // Stepped platform (3 discs, each slightly smaller and taller)
     const p0 = new THREE.Mesh(new THREE.CylinderGeometry(7, 7.5, 1.0, 32), stoneMat)
