@@ -107,6 +107,8 @@ export class GameEngine {
   private smoothCarY = 0
   private smoothCarYInit = false
 
+  onLoadProgress?: (progress: number) => void
+
   async init(canvas: HTMLCanvasElement, carType: CarType, nickname: string, onHUDUpdate: (s: HUDState) => void): Promise<void> {
     this.carType = carType
     this.onHUDUpdate = onHUDUpdate
@@ -183,11 +185,26 @@ export class GameEngine {
     const mercedesPos = this.merSpawnPos.clone()
     const bmwcsPos = this.bmwcsSpawnPos.clone()
 
+    this.onLoadProgress?.(0.2) // map built
+
     const mercedes = new Mercedes(this.scene, this.physicsWorld)
     const bmw = new BMW(this.scene, this.physicsWorld)
     const toyota = new Toyota(this.scene, this.physicsWorld)
     const bmwcs = new BMWCS(this.scene, this.physicsWorld)
-    await Promise.all([mercedes.spawn(mercedesPos), bmw.spawn(bmwPos), toyota.spawn(toyotaPos), bmwcs.spawn(bmwcsPos)])
+
+    // Load cars and report progress as each finishes
+    let carsLoaded = 0
+    const trackSpawn = async (p: Promise<void>) => {
+      await p
+      carsLoaded++
+      this.onLoadProgress?.(0.2 + (carsLoaded / 4) * 0.75)
+    }
+    await Promise.all([
+      trackSpawn(mercedes.spawn(mercedesPos)),
+      trackSpawn(bmw.spawn(bmwPos)),
+      trackSpawn(toyota.spawn(toyotaPos)),
+      trackSpawn(bmwcs.spawn(bmwcsPos)),
+    ])
 
     if (this.destroyed) {
       mercedes.dispose(); bmw.dispose(); toyota.dispose(); bmwcs.dispose()

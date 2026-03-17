@@ -22,6 +22,7 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
   const engineRef  = useRef<GameEngine | null>(null)
   const [hudState, setHudState]         = useState<HUDState>({ ...DEFAULT_HUD })
   const [loading, setLoading]           = useState(true)
+  const [loadProgress, setLoadProgress] = useState(0)
   const [muted, setMuted]               = useState(false)
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([])
   const [noclipActive, setNoclipActive] = useState(false)
@@ -35,6 +36,7 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
 
     engine.onChatMessage  = (msg) => setChatMessages(prev => [...prev, { ...msg, ts: Date.now() }])
     engine.onNoclipChange = (active) => setNoclipActive(active)
+    engine.onLoadProgress = (p) => setLoadProgress(p)
 
     engine.init(canvas, 'bmw', nickname, (state) => {
       setHudState(state)
@@ -105,10 +107,10 @@ export default function GameCanvas({ nickname, onBack }: GameCanvasProps) {
             <div className="text-white text-2xl font-bold tracking-widest mb-4" style={{ fontFamily: 'Rajdhani, sans-serif' }}>
               LOADING TBILISI...
             </div>
-            <div className="w-48 h-1 bg-white/10 rounded-full mx-auto overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: '60%' }} />
+            <div className="w-48 h-1.5 bg-white/10 rounded-full mx-auto overflow-hidden">
+              <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${Math.round(loadProgress * 100)}%` }} />
             </div>
-            <div className="mt-3 text-white/40 text-xs font-mono">Building Freedom Square</div>
+            <div className="mt-3 text-white/40 text-xs font-mono">{Math.round(loadProgress * 100)}%</div>
           </div>
         </div>
       )}
