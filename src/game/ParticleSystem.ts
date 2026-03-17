@@ -5,7 +5,7 @@ interface Particle {
   velocity: THREE.Vector3
   life: number
   maxLife: number
-  type: 'smoke' | 'spark' | 'dust'
+  type: 'smoke' | 'spark' | 'dust' | 'blood'
 }
 
 export class ParticleSystem {
@@ -17,6 +17,7 @@ export class ParticleSystem {
   private exhaustMat: THREE.MeshBasicMaterial
   private sparkMat: THREE.MeshBasicMaterial
   private dustMat: THREE.MeshBasicMaterial
+  private bloodMat: THREE.MeshBasicMaterial
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
@@ -37,6 +38,11 @@ export class ParticleSystem {
     })
     this.dustMat = new THREE.MeshBasicMaterial({
       color: 0x8b7355,
+      transparent: true,
+      depthWrite: false,
+    })
+    this.bloodMat = new THREE.MeshBasicMaterial({
+      color: 0x8b0000,
       transparent: true,
       depthWrite: false,
     })
@@ -76,6 +82,24 @@ export class ParticleSystem {
     }
   }
 
+  emitBlood(position: THREE.Vector3, count = 8) {
+    for (let i = 0; i < count; i++) {
+      const size = 0.04 + Math.random() * 0.03
+      const geo = new THREE.SphereGeometry(size, 4, 4)
+      const mat = this.bloodMat.clone()
+      mat.opacity = 0.9
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.copy(position)
+      const vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 3,
+        Math.random() * 2 + 0.5,
+        (Math.random() - 0.5) * 3
+      )
+      this.scene.add(mesh)
+      this.particles.push({ mesh, velocity: vel, life: 0.2, maxLife: 0.2, type: 'blood' })
+    }
+  }
+
   private spawn(type: 'smoke' | 'spark' | 'dust', pos: THREE.Vector3, life: number) {
     const size = type === 'spark' ? 0.06 : type === 'smoke' ? 0.18 : 0.2
     const geo = new THREE.SphereGeometry(size, 4, 4)
@@ -111,6 +135,9 @@ export class ParticleSystem {
       if (p.type === 'spark') {
         p.velocity.y -= 8 * dt
         p.velocity.multiplyScalar(0.92)
+      } else if (p.type === 'blood') {
+        p.velocity.y -= 12 * dt
+        p.velocity.multiplyScalar(0.90)
       } else {
         p.velocity.y -= 0.3 * dt
         p.velocity.multiplyScalar(0.98)

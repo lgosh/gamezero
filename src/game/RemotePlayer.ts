@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { RemotePlayerData } from './NetworkManager'
+import { buildGlockMesh, buildMuzzleFlash } from './entities/Player'
 
 // ── Character colours (matching local Player) ─────────────────────────────
 const SKIN  = 0x3d2b1f
@@ -22,7 +23,7 @@ function cyl(rt: number, rb: number, h: number, color: number) {
 }
 
 /** Builds the CJ character group — identical to local Player mesh. Feet at y=0. */
-function buildPlayerGroup(): THREE.Group {
+function buildPlayerGroup(): { group: THREE.Group; rightArmGroup: THREE.Group } {
   const g = new THREE.Group()
   g.scale.setScalar(0.85)
 
@@ -35,17 +36,19 @@ function buildPlayerGroup(): THREE.Group {
     g.add(leg)
   }
 
-  const hips  = box(0.48, 0.25, 0.28, JEANS); hips.position.set(0, 0.85, 0); g.add(hips)
-  const torso = box(0.50, 0.55, 0.30, SHIRT); torso.position.set(0, 1.25, 0); g.add(torso)
+  const hips  = box(0.48, 0.25, 0.28, JEANS); hips.position.set(0, 0.85, 0); hips.userData.hitZone = 'body'; g.add(hips)
+  const torso = box(0.50, 0.55, 0.30, SHIRT); torso.position.set(0, 1.25, 0); torso.userData.hitZone = 'body'; g.add(torso)
   const sL = box(0.12, 0.10, 0.30, SHIRT); sL.position.set(-0.19, 1.5, 0); g.add(sL)
   const sR = box(0.12, 0.10, 0.30, SHIRT); sR.position.set( 0.19, 1.5, 0); g.add(sR)
 
-  for (const side of [-0.32, 0.32]) {
+  let rightArmGroup!: THREE.Group
+  for (const [side, isRight] of [[-0.32, false], [0.32, true]] as [number, boolean][]) {
     const arm = new THREE.Group()
     arm.position.set(side, 1.45, 0)
     const ua = cyl(0.09, 0.08, 0.42, SKIN); ua.position.set(0, -0.21, 0); arm.add(ua)
     const la = cyl(0.08, 0.07, 0.38, SKIN); la.position.set(0, -0.55, 0); arm.add(la)
     const ha = box(0.11, 0.12, 0.11, SKIN);  ha.position.set(0, -0.75, 0); arm.add(ha)
+    if (isRight) rightArmGroup = arm
     g.add(arm)
   }
 
@@ -55,15 +58,15 @@ function buildPlayerGroup(): THREE.Group {
     new THREE.SphereGeometry(0.24, 12, 10),
     new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.85 })
   )
-  head.position.set(0, 1.78, 0); g.add(head)
+  head.position.set(0, 1.78, 0); head.userData.hitZone = 'head'; g.add(head)
 
   const hair = new THREE.Mesh(
     new THREE.SphereGeometry(0.245, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshStandardMaterial({ color: HAIR, roughness: 0.9 })
   )
-  hair.position.set(0, 1.80, 0); g.add(hair)
+  hair.position.set(0, 1.80, 0); hair.userData.hitZone = 'head'; g.add(hair)
 
-  return g
+  return { group: g, rightArmGroup }
 }
 
 // ── Name tag sprite ────────────────────────────────────────────────────────
@@ -102,16 +105,17 @@ function makeNameTag(nickname: string): THREE.Sprite {
 }
 
 // ── RemotePlayer ───────────────────────────────────────────────────────────
-// Only represents the on-foot character + name tag.
-// When a remote player is driving, the actual game Car entity (BMW/Mercedes)
-// is moved to their position by GameEngine — no separate car mesh here.
 export class RemotePlayer {
   readonly id: string
   readonly nickname: string
 
   private scene: THREE.Scene
-  private footGroup: THREE.Group   // CJ character, shown when on foot
+  readonly footGroup: THREE.Group   // CJ character, shown when on foot — public for raycasting
   private nameTag: THREE.Sprite    // world-space, always visible + upright
+  private rightArmGroup: THREE.Group
+  private glockMesh: THREE.Group
+  private muzzleFlash: THREE.Mesh
+  private muzzleFlashTimer = 0
 
   // Interpolation
   private currentPos  = new THREE.Vector3()
@@ -121,17 +125,27 @@ export class RemotePlayer {
   private firstUpdate = true
 
   mode: 'driving' | 'onfoot' = 'onfoot'
+  private currentWeapon: 'fist' | 'glock' = 'fist'
 
   constructor(scene: THREE.Scene, data: RemotePlayerData) {
     this.scene    = scene
     this.id       = data.id
     this.nickname = data.nickname
 
-    // Foot group: feet at y=0, placed at (localPos.y - 0.4) so feet touch ground
-    // when group is at physics-body-center (body sphere center = feet + 0.4)
-    this.footGroup = buildPlayerGroup()
+    const { group, rightArmGroup } = buildPlayerGroup()
+    this.footGroup = group
+    this.rightArmGroup = rightArmGroup
     this.footGroup.position.y = -0.4
     scene.add(this.footGroup)
+
+    // Glock mesh on right arm (hidden by default)
+    this.glockMesh = buildGlockMesh()
+    this.glockMesh.position.set(0, -0.82, 0)
+    this.glockMesh.visible = false
+    this.rightArmGroup.add(this.glockMesh)
+
+    this.muzzleFlash = buildMuzzleFlash()
+    this.glockMesh.add(this.muzzleFlash)
 
     // Name tag always rendered in world space above the player
     this.nameTag = makeNameTag(data.nickname)
@@ -145,6 +159,21 @@ export class RemotePlayer {
     this.targetQuat.set(data.quat[0], data.quat[1], data.quat[2], data.quat[3])
     this.mode = data.mode
 
+    // Weapon sync
+    const weapon = data.weapon ?? 'fist'
+    if (weapon !== this.currentWeapon) {
+      this.currentWeapon = weapon
+      this.glockMesh.visible = weapon === 'glock'
+      this.rightArmGroup.rotation.x = weapon === 'glock' ? -1.2 : 0
+    }
+
+    // Shooting flash
+    if (data.shooting) {
+      this.muzzleFlashTimer = 0.05
+      const s = 0.8 + Math.random() * 0.6
+      this.muzzleFlash.scale.set(s, s, s)
+    }
+
     if (this.firstUpdate) {
       this.currentPos.copy(this.targetPos)
       this.currentQuat.copy(this.targetQuat)
@@ -156,6 +185,12 @@ export class RemotePlayer {
     const alpha = Math.min(1, dt * 14)
     this.currentPos.lerp(this.targetPos, alpha)
     this.currentQuat.slerp(this.targetQuat, alpha)
+
+    // Muzzle flash tick
+    this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt)
+    const flashMat = this.muzzleFlash.material as THREE.MeshBasicMaterial
+    flashMat.opacity = this.muzzleFlashTimer > 0 ? 1 : 0
+    this.muzzleFlash.visible = this.muzzleFlashTimer > 0
 
     // Foot character: only visible when on foot
     this.footGroup.visible = this.mode === 'onfoot'

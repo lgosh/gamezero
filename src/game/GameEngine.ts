@@ -34,6 +34,14 @@ export interface HUDState {
   minimapCanvas?: HTMLCanvasElement
   remotePlayers?: { x: number; z: number }[]
   voiceSpeakers?: string[]
+  weapon?: 'fist' | 'glock'
+  magazineAmmo?: number
+  reserveAmmo?: number
+  reloading?: boolean
+  armor?: number
+  health?: number
+  dead?: boolean
+  killFeed?: { killer: string; victim: string; weapon: string; time: number }[]
 }
 
 export class GameEngine {
@@ -107,6 +115,11 @@ export class GameEngine {
   private noclipYaw = 0
   private noclipPitch = 0
   onNoclipChange?: (active: boolean) => void
+
+  // Combat
+  private killFeed: { killer: string; victim: string; weapon: string; time: number }[] = []
+  private lastKiller: { nickname: string; weapon: string } | null = null
+  private raycaster = new THREE.Raycaster()
 
   // Smoke timer
   private smokeTimer = 0
@@ -298,6 +311,22 @@ export class GameEngine {
         this.performRestart()
       }
       // Voice chat
+      // Combat: incoming hit from another player
+      this.network.onHit = (damage, _hitZone, shooterId, shooterNickname) => {
+        if (this.player && !this.player.dead && this.gameMode === 'onfoot') {
+          this.player.takeDamage(damage)
+          this.soundSystem.playBulletHit()
+          if (this.player.dead) {
+            this.soundSystem.playDeath()
+            this.lastKiller = { nickname: shooterNickname, weapon: 'glock' }
+            this.network?.sendKilled(shooterId, shooterNickname, 'glock')
+          }
+        }
+      }
+      this.network.onKillFeed = (killerNickname, victimNickname, weapon) => {
+        this.killFeed.push({ killer: killerNickname, victim: victimNickname, weapon, time: Date.now() })
+      }
+
       this.network.onVoice = (id, _nickname, data) => {
         this.voiceChat?.playRemoteAudio(id, data)
       }
@@ -538,6 +567,33 @@ export class GameEngine {
       for (const c of this.allCars) if (!c.culled) c.syncVisual()
 
       this.player.update(input, dt)
+
+      // Gunshot sound + hit detection
+      if (this.player.shotFired) {
+        this.player.shotFired = false
+        this.soundSystem.playGunshot()
+        this.performHitDetection()
+      }
+      // Reload sound
+      if (this.player.reloadStarted) {
+        this.player.reloadStarted = false
+        this.soundSystem.playReload()
+      }
+
+      // Death/respawn handling
+      if (this.player.dead) {
+        if (this.player.updateDeath(dt)) {
+          // Respawn with full health/armor
+          this.player.dispose()
+          this.player = new Player(this.scene, this.physicsWorld, this.playerSpawnPos.clone(), this.spawnHeading)
+          this.lastKiller = null
+        }
+      }
+
+      // Expire old kill feed entries (keep for 5 seconds)
+      const now = Date.now()
+      this.killFeed = this.killFeed.filter(k => now - k.time < 30000)
+
       const pPos = this.player.getPosition()
       const playerFwd = this.player.getForwardVector()
       this.cameraSystem.updateOnFoot(pPos, playerFwd, dt, this.player.getCameraPitch())
@@ -546,6 +602,7 @@ export class GameEngine {
       currentPlayerPos = { x: pPos.x, z: pPos.z }
       currentHeading = Math.atan2(playerFwd.x, playerFwd.z)
 
+      const ammo = this.player.getAmmo()
       const remotePositions2: { x: number; z: number }[] = []
       for (const [, rs] of this.remoteStates) {
         remotePositions2.push({ x: rs.pos[0], z: rs.pos[2] })
@@ -557,6 +614,14 @@ export class GameEngine {
         minimapCanvas: this.map.minimapCanvas ?? undefined,
         remotePlayers: remotePositions2,
         voiceSpeakers: [...this.voiceSpeakers],
+        weapon: this.player.getWeapon(),
+        magazineAmmo: ammo.magazine,
+        reserveAmmo: ammo.reserve,
+        reloading: this.player.isReloading(),
+        armor: this.player.armor,
+        health: this.player.health,
+        dead: this.player.dead,
+        killFeed: this.killFeed,
       }
       this.onHUDUpdate?.(this.lastHUDState)
 
@@ -677,6 +742,7 @@ export class GameEngine {
       minimapCanvas: this.map.minimapCanvas ?? undefined,
       remotePlayers: remotePositions,
       voiceSpeakers: [...this.voiceSpeakers],
+      killFeed: this.killFeed,
     }
     this.onHUDUpdate?.(this.lastHUDState)
 
@@ -712,7 +778,41 @@ export class GameEngine {
       speedKmh = this.car.speedKmh
     }
 
-    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh, carId: this.getLocalCarId() })
+    const weapon = this.player?.getWeapon()
+    const shooting = this.player?.getMuzzleFlashActive() || undefined
+    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh, carId: this.getLocalCarId(), weapon, shooting })
+  }
+
+  private performHitDetection() {
+    if (!this.player) return
+
+    // Raycast from camera center (crosshair) into the scene
+    this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera)
+    this.raycaster.far = 100
+
+    for (const [id, rp] of this.remotePlayers) {
+      if (rp.mode !== 'onfoot') continue
+      const intersects = this.raycaster.intersectObject(rp.footGroup, true)
+      if (intersects.length > 0) {
+        const hit = intersects[0]
+        // Walk up to find hitZone tag
+        let hitZone = 'body'
+        let obj: THREE.Object3D | null = hit.object
+        while (obj) {
+          if (obj.userData?.hitZone) { hitZone = obj.userData.hitZone; break }
+          obj = obj.parent
+        }
+        const damage = hitZone === 'head' ? 30 : 10
+
+        // Blood splatter at hit point
+        this.particleSystem.emitBlood(hit.point)
+        this.soundSystem.playBulletHit()
+
+        // Send hit to server → relayed to target
+        this.network?.sendHit(id, damage, hitZone)
+        break // one hit per shot
+      }
+    }
   }
 
   private exitCar() {
@@ -808,8 +908,14 @@ export class GameEngine {
       car.damage = 0
       car.setHeadlights(false)
       car.uncull()
-      // Don't sleep — let cars fall to the ground from spawn height
+      // Ensure DYNAMIC so cars fall to ground (updateRemoteCars may have set KINEMATIC)
+      car.chassisBody.type = CANNON.Body.DYNAMIC
       car.chassisBody.wakeUp()
+    }
+
+    // Clear stale remote driving states so updateRemoteCars doesn't override reset positions
+    for (const [id, state] of this.remoteStates) {
+      this.remoteStates.set(id, { ...state, mode: 'onfoot', carId: null })
     }
 
     this.smoothCarYInit = false

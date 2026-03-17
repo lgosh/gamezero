@@ -11,6 +11,9 @@ export interface InputState {
   sprint: boolean
   jump: boolean
   voiceChat: boolean       // true while K is held
+  shoot: boolean           // true while left mouse button is held
+  weaponSwitch: boolean    // true only on the frame Q is pressed
+  reload: boolean          // true only on the frame R is pressed
   mouseDx: number
   mouseDy: number
 }
@@ -23,6 +26,7 @@ export class InputManager {
   private readonly STEER_RETURN = 3.5
   private mouseDx = 0
   private mouseDy = 0
+  private mouseDown = false
 
   private onKeyDown = (e: KeyboardEvent) => {
     // Let the chat input (or any other text field) handle its own keys
@@ -32,12 +36,16 @@ export class InputManager {
   }
   private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(e.code) }
   private onMouseMove = (e: MouseEvent)    => { this.mouseDx += e.movementX; this.mouseDy += e.movementY }
-  private onBlur      = () => { this.keys.clear() }  // clear only on true page-focus loss
+  private onMouseDown = (e: MouseEvent)    => { if (e.button === 0) this.mouseDown = true }
+  private onMouseUp   = (e: MouseEvent)    => { if (e.button === 0) this.mouseDown = false }
+  private onBlur      = () => { this.keys.clear(); this.mouseDown = false }
 
   constructor() {
     document.addEventListener('keydown', this.onKeyDown)
     document.addEventListener('keyup',   this.onKeyUp)
     document.addEventListener('mousemove', this.onMouseMove)
+    document.addEventListener('mousedown', this.onMouseDown)
+    document.addEventListener('mouseup',   this.onMouseUp)
     window.addEventListener('blur', this.onBlur)
   }
 
@@ -60,7 +68,8 @@ export class InputManager {
       return {
         throttle: 0, brake: 0, steering: 0, handbrake: false, honk: false,
         lookBack: false, cameraToggle: false, pauseToggle: false,
-        exitEnterToggle: false, sprint: false, jump: false, voiceChat: false, mouseDx: 0, mouseDy: 0,
+        exitEnterToggle: false, sprint: false, jump: false, voiceChat: false,
+        shoot: false, weaponSwitch: false, reload: false, mouseDx: 0, mouseDy: 0,
       }
     }
 
@@ -90,6 +99,9 @@ export class InputManager {
     const sprint = this.key('Space')
     const jump   = this.key('ShiftLeft', 'ShiftRight')
     const voiceChat = this.key('KeyK')
+    const shoot = this.mouseDown
+    const weaponSwitch = this.justPressed('KeyQ')
+    const reload = this.justPressed('KeyR')
 
     // Snapshot keys for next frame's justPressed check
     this.prevKeys = new Set(this.keys)
@@ -113,6 +125,9 @@ export class InputManager {
       sprint,
       jump,
       voiceChat,
+      shoot,
+      weaponSwitch,
+      reload,
       mouseDx,
       mouseDy,
     }
@@ -122,6 +137,8 @@ export class InputManager {
     document.removeEventListener('keydown', this.onKeyDown)
     document.removeEventListener('keyup',   this.onKeyUp)
     document.removeEventListener('mousemove', this.onMouseMove)
+    document.removeEventListener('mousedown', this.onMouseDown)
+    document.removeEventListener('mouseup',   this.onMouseUp)
     window.removeEventListener('blur', this.onBlur)
   }
 }

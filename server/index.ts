@@ -15,6 +15,8 @@ interface PlayerState {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null
+  weapon?: 'fist' | 'glock'
+  shooting?: boolean
 }
 
 const players = new Map<string, PlayerState>()
@@ -105,6 +107,8 @@ const server = Bun.serve<WSData>({
         player.mode     = msg.mode     as PlayerState['mode']
         player.speedKmh = msg.speedKmh as number
         player.carId    = (msg.carId   as string | null) ?? null
+        player.weapon   = (msg.weapon  as PlayerState['weapon']) ?? undefined
+        player.shooting = (msg.shooting as boolean) ?? undefined
         return
       }
 
@@ -118,8 +122,43 @@ const server = Bun.serve<WSData>({
       if (msg.type === 'restart') {
         const player = players.get(id)
         if (!player) return
+        // Reset ALL players to on-foot so the next states broadcast
+        // doesn't contain stale driving positions that override car resets
+        for (const p of players.values()) {
+          p.mode = 'onfoot'
+          p.carId = null
+          p.speedKmh = 0
+          p.shooting = undefined
+        }
         broadcastAll({ type: 'restart', initiator: player.nickname })
         console.log(`[restart] ${player.nickname} triggered restart`)
+        return
+      }
+
+      if (msg.type === 'hit') {
+        const player = players.get(id)
+        if (!player) return
+        const targetWs = sockets.get(msg.targetId as string)
+        if (targetWs) targetWs.send(JSON.stringify({
+          type: 'hit',
+          damage: msg.damage,
+          hitZone: msg.hitZone,
+          shooterId: id,
+          shooterNickname: player.nickname,
+        }))
+        return
+      }
+
+      if (msg.type === 'killed') {
+        const player = players.get(id)
+        if (!player) return
+        broadcastAll({
+          type: 'kill_feed',
+          killerNickname: msg.killerNickname,
+          victimNickname: player.nickname,
+          weapon: msg.weapon,
+        })
+        console.log(`[kill] ${msg.killerNickname} killed ${player.nickname}`)
         return
       }
 

@@ -290,30 +290,53 @@ function DamageIndicator({ damage }: { damage: number }) {
 }
 
 /** GTA San Andreas style stats */
-function GTAStats() {
+function GTAStats({ weapon, magazineAmmo, reserveAmmo, armor, health }: {
+  weapon?: 'fist' | 'glock'
+  magazineAmmo?: number
+  reserveAmmo?: number
+  armor?: number
+  health?: number
+}) {
+  const armorPct = armor ?? 100
+  const healthPct = health ?? 100
   return (
     <div className="flex flex-col items-end gap-1 font-sans font-black italic text-right uppercase" style={{ textShadow: '2px 2px 0px #000' }}>
       {/* Time */}
       <div className="text-2xl text-[#ffffff] tracking-tighter">14:30</div>
-      
+
       {/* Money */}
       <div className="text-3xl text-[#2d7d32] tracking-tighter">$00005000</div>
 
       {/* Health/Armor bars */}
       <div className="w-32 flex flex-col gap-1.5 mt-1">
-        {/* Armor (Blue) */}
+        {/* Armor */}
         <div className="h-2.5 bg-[#000000] border-2 border-[#000000] overflow-hidden">
-          <div className="h-full bg-[#cbd1d4]" style={{ width: '100%' }} />
+          <div className="h-full bg-[#cbd1d4] transition-all duration-150" style={{ width: `${armorPct}%` }} />
         </div>
-        {/* Health (Red) */}
+        {/* Health */}
         <div className="h-2.5 bg-[#000000] border-2 border-[#000000] overflow-hidden">
-          <div className="h-full bg-[#b22222]" style={{ width: '100%' }} />
+          <div
+            className="h-full transition-all duration-150"
+            style={{
+              width: `${healthPct}%`,
+              backgroundColor: healthPct > 50 ? '#b22222' : healthPct > 25 ? '#cc4400' : '#ff0000',
+            }}
+          />
         </div>
       </div>
 
       {/* Weapon Icon */}
-      <div className="mt-2 w-16 h-16 bg-black/40 border-2 border-white/20 flex items-center justify-center text-4xl">
-        👊
+      <div className="mt-2 w-16 h-16 bg-black/40 border-2 border-white/20 flex flex-col items-center justify-center">
+        {weapon === 'glock' ? (
+          <>
+            <span className="text-2xl leading-none">🔫</span>
+            <span className="text-[10px] text-white/80 font-mono not-italic mt-0.5">
+              {magazineAmmo}/{reserveAmmo}
+            </span>
+          </>
+        ) : (
+          <span className="text-4xl leading-none">👊</span>
+        )}
       </div>
     </div>
   )
@@ -357,7 +380,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
 
       {/* ── Top-right: GTA Stats ────────────────────────────────────────────── */}
       <div className="absolute top-6 right-6 pointer-events-none">
-        <GTAStats />
+        <GTAStats weapon={state.weapon} magazineAmmo={state.magazineAmmo} reserveAmmo={state.reserveAmmo} armor={state.armor} health={state.health} />
       </div>
 
       {/* ── Bottom-right: Speedometer + RPM + Gear ───────────────────────────── */}
@@ -394,7 +417,8 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div>Mouse — Look / turn</div>
             <div>Space — Sprint</div>
             <div>Shift — Jump</div>
-            <div>F — Enter car</div>
+            <div>F — Enter car &nbsp; Q — Weapon</div>
+            <div>LMB — Shoot &nbsp; R — Reload</div>
             <div className="border-t border-white/10 mt-1 pt-1">T — Chat &nbsp; K — Voice</div>
             <div className="text-white/50">P / ESC — Pause</div>
           </div>
@@ -427,6 +451,28 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Crosshair (GTA-style, only with gun on foot) ──────────────────────── */}
+      {state.weapon === 'glock' && state.onFoot && state.state === 'playing' && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <svg width="24" height="24" viewBox="0 0 24 24" className="opacity-80">
+            <circle cx="12" cy="12" r="3" fill="none" stroke="white" strokeWidth="1.5" />
+            <line x1="12" y1="0" x2="12" y2="7" stroke="white" strokeWidth="1.5" />
+            <line x1="12" y1="17" x2="12" y2="24" stroke="white" strokeWidth="1.5" />
+            <line x1="0" y1="12" x2="7" y2="12" stroke="white" strokeWidth="1.5" />
+            <line x1="17" y1="12" x2="24" y2="12" stroke="white" strokeWidth="1.5" />
+          </svg>
+        </div>
+      )}
+
+      {/* ── Reloading indicator ─────────────────────────────────────────────── */}
+      {state.reloading && state.state === 'playing' && (
+        <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none" style={{ top: '55%' }}>
+          <div className="text-white/60 text-xs font-mono tracking-widest uppercase animate-pulse">
+            Reloading...
+          </div>
         </div>
       )}
 
@@ -463,6 +509,49 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
             <div className="text-white/60 text-base mb-2">Your car is destroyed</div>
             <div className="text-white/40 text-sm mb-6">Freedom Square, Tbilisi</div>
             <button onClick={onReset} className="px-8 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded tracking-wider transition-colors">RESTART</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Kill feed (right side, GTA style) ──────────────────────────────── */}
+      {state.killFeed && state.killFeed.length > 0 && (
+        <div className="absolute right-6 bottom-1/3 flex flex-col gap-1 pointer-events-none items-end">
+          {state.killFeed.slice(-5).map((k, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 px-3 py-1 rounded"
+              style={{ background: 'rgba(0,0,0,0.6)' }}
+            >
+              <span className="text-white text-xs font-bold">{k.killer}</span>
+              <span className="text-red-400 text-xs">🔫</span>
+              <span className="text-gray-300 text-xs font-bold">{k.victim}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── WASTED overlay (GTA style) ─────────────────────────────────────── */}
+      {state.dead && (
+        <div
+          className="absolute inset-0 flex items-center justify-center pointer-events-none"
+          style={{
+            background: 'rgba(120, 0, 0, 0.55)',
+            animation: 'wastedFadeIn 0.5s ease-out',
+          }}
+        >
+          <div className="text-center">
+            <div
+              className="text-red-500 font-black italic tracking-[0.3em] uppercase"
+              style={{
+                fontSize: '5rem',
+                textShadow: '4px 4px 0px #000, 0 0 40px rgba(255,0,0,0.5)',
+                fontFamily: 'Impact, sans-serif',
+                letterSpacing: '0.15em',
+                animation: 'wastedTextIn 0.8s ease-out',
+              }}
+            >
+              WASTED
+            </div>
           </div>
         </div>
       )}

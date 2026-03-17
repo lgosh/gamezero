@@ -7,6 +7,8 @@ export interface LocalState {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null   // 'bmw' | 'mercedes' | 'toyota' | null
+  weapon?: 'fist' | 'glock'
+  shooting?: boolean
 }
 
 export interface RemotePlayerData {
@@ -18,6 +20,8 @@ export interface RemotePlayerData {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null
+  weapon?: 'fist' | 'glock'
+  shooting?: boolean
 }
 
 export interface ChatMessage {
@@ -51,6 +55,8 @@ export class NetworkManager {
   onRestart?: () => void
   onVoice?: (id: string, nickname: string, data: ArrayBuffer) => void
   onVoiceSpeaking?: (id: string, nickname: string, speaking: boolean) => void
+  onHit?: (damage: number, hitZone: string, shooterId: string, shooterNickname: string) => void
+  onKillFeed?: (killerNickname: string, victimNickname: string, weapon: string) => void
   onDisconnected?: () => void
 
   connect(nickname: string) {
@@ -124,6 +130,10 @@ export class NetworkManager {
         this.onVoiceSpeaking?.(msg.id as string, msg.nickname as string, true)
       } else if (msg.type === 'voice_stop') {
         this.onVoiceSpeaking?.(msg.id as string, msg.nickname as string, false)
+      } else if (msg.type === 'hit') {
+        this.onHit?.(msg.damage as number, msg.hitZone as string, msg.shooterId as string, msg.shooterNickname as string)
+      } else if (msg.type === 'kill_feed') {
+        this.onKillFeed?.(msg.killerNickname as string, msg.victimNickname as string, msg.weapon as string)
       }
       // pong is silently consumed
     }
@@ -197,6 +207,18 @@ export class NetworkManager {
       combined.set(new Uint8Array(audio), 36)
       this.ws!.send(combined.buffer)
     })
+  }
+
+  sendHit(targetId: string, damage: number, hitZone: string) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'hit', targetId, damage, hitZone }))
+    }
+  }
+
+  sendKilled(killerId: string, killerNickname: string, weapon: string) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'killed', killerId, killerNickname, weapon }))
+    }
   }
 
   sendVoiceStart() {

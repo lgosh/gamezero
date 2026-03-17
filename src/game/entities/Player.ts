@@ -8,12 +8,20 @@ const SHIRT  = 0xffffff // White tank top
 const JEANS  = 0x2b3d5c // Blue jeans
 const SHOE   = 0x111111 // Black sneakers
 const HAIR   = 0x111111 // CJ Buzz cut
+const GUN_DARK  = 0x222222
+const GUN_LIGHT = 0x333333
 
 const WALK_SPEED   = 4.5   // m/s forward
 const SPRINT_SPEED = 9.0   // m/s sprint
 const BACK_SPEED   = 2.8   // m/s backward
 const TURN_SPEED   = 2.0   // rad/s (A/D secondary)
 const MOUSE_SENS   = 0.003 // rad/pixel
+
+const SHOOT_COOLDOWN = 0.12  // ~8 rounds/sec
+const RECOIL_DURATION = 0.08
+const FLASH_DURATION = 0.05
+const MAGAZINE_SIZE = 20
+const RELOAD_TIME = 1.5  // seconds
 
 function box(w: number, h: number, d: number, color: number) {
   return new THREE.Mesh(
@@ -29,6 +37,51 @@ function cyl(rt: number, rb: number, h: number, color: number) {
   )
 }
 
+/** Build a Glock pistol from box primitives */
+export function buildGlockMesh(): THREE.Group {
+  const gun = new THREE.Group()
+
+  // Grip
+  const grip = box(0.04, 0.10, 0.07, GUN_DARK)
+  grip.position.set(0, -0.05, 0)
+  gun.add(grip)
+
+  // Slide (top of gun)
+  const slide = box(0.035, 0.04, 0.14, GUN_DARK)
+  slide.position.set(0, 0.02, -0.04)
+  gun.add(slide)
+
+  // Barrel (extends past slide)
+  const barrel = box(0.02, 0.02, 0.03, GUN_LIGHT)
+  barrel.position.set(0, 0.01, -0.12)
+  gun.add(barrel)
+
+  // Trigger guard
+  const guard = box(0.035, 0.015, 0.04, GUN_LIGHT)
+  guard.position.set(0, -0.03, -0.02)
+  gun.add(guard)
+
+  return gun
+}
+
+/** Build muzzle flash — a small bright plane at the barrel tip */
+export function buildMuzzleFlash(): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(0.12, 0.12)
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffcc00,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  const flash = new THREE.Mesh(geo, mat)
+  flash.position.set(0, 0.01, -0.145)
+  flash.rotation.y = Math.PI / 2
+  return flash
+}
+
+export type WeaponType = 'fist' | 'glock'
+
 export class Player {
   /** Root Three.js group — base is at feet level */
   group: THREE.Group
@@ -43,6 +96,27 @@ export class Player {
   private rightLegGroup!: THREE.Group
   private leftArmGroup!: THREE.Group
   private rightArmGroup!: THREE.Group
+
+  // Weapon system
+  private weapon: WeaponType = 'fist'
+  private magazineAmmo = MAGAZINE_SIZE
+  private reserveAmmo = 100
+  private shootCooldown = 0
+  private recoilTimer = 0
+  private muzzleFlashTimer = 0
+  private reloading = false
+  private reloadTimer = 0
+  private glockMesh!: THREE.Group
+  private muzzleFlash!: THREE.Mesh
+  shotFired = false      // read by GameEngine to trigger gunshot sound
+  reloadStarted = false  // read by GameEngine to trigger reload sound
+
+  // Health system
+  armor = 100
+  health = 100
+  dead = false
+  private deathTimer = 0
+  private readonly RESPAWN_DELAY = 3.0
 
   constructor(
     private scene: THREE.Scene,
@@ -107,7 +181,7 @@ export class Player {
     const torso = box(0.5, 0.55, 0.3, SHIRT)
     torso.position.set(0, 1.25, 0)
     g.add(torso)
-    
+
     // Tank top "shoulders" - thinner than regular shirt
     const shoulderL = box(0.12, 0.1, 0.3, SHIRT)
     shoulderL.position.set(-0.19, 1.5, 0)
@@ -142,6 +216,15 @@ export class Player {
       g.add(armGroup)
     }
 
+    // ── Glock (attached to right hand, hidden by default) ──────────────────
+    this.glockMesh = buildGlockMesh()
+    this.glockMesh.position.set(0, -0.82, 0)
+    this.glockMesh.visible = false
+    this.rightArmGroup.add(this.glockMesh)
+
+    this.muzzleFlash = buildMuzzleFlash()
+    this.glockMesh.add(this.muzzleFlash)
+
     // ── Neck ─────────────────────────────────────────────────────────────────
     const neck = cyl(0.08, 0.09, 0.15, SKIN)
     neck.position.set(0, 1.55, 0)
@@ -154,7 +237,7 @@ export class Player {
     )
     head.position.set(0, 1.78, 0)
     g.add(head)
-    
+
     // Buzz cut (Hair)
     const hair = new THREE.Mesh(
       new THREE.SphereGeometry(0.245, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
@@ -165,6 +248,12 @@ export class Player {
   }
 
   update(input: InputState, dt: number) {
+    // No movement when dead
+    if (this.dead) {
+      this.body.velocity.set(0, this.body.velocity.y, 0)
+      return
+    }
+
     // Mouse X rotates heading; A/D as secondary
     this.heading -= input.mouseDx * MOUSE_SENS
     this.heading -= input.steering * TURN_SPEED * dt
@@ -191,6 +280,54 @@ export class Player {
       this.jumpCooldown = 0.5
     }
 
+    // Weapon switch (can't switch while reloading)
+    if (input.weaponSwitch && !this.reloading) {
+      this.weapon = this.weapon === 'fist' ? 'glock' : 'fist'
+      this.glockMesh.visible = this.weapon === 'glock'
+    }
+
+    // Reload logic
+    if (this.reloading) {
+      this.reloadTimer -= dt
+      if (this.reloadTimer <= 0) {
+        this.reloading = false
+        const needed = MAGAZINE_SIZE - this.magazineAmmo
+        const canTake = Math.min(needed, this.reserveAmmo)
+        this.magazineAmmo += canTake
+        this.reserveAmmo -= canTake
+      }
+    }
+
+    // Manual reload (R) or auto-reload when magazine empty
+    const wantsReload = this.weapon === 'glock' && !this.reloading && this.reserveAmmo > 0
+    if (wantsReload && (input.reload && this.magazineAmmo < MAGAZINE_SIZE || this.magazineAmmo === 0)) {
+      this.reloading = true
+      this.reloadTimer = RELOAD_TIME
+      this.reloadStarted = true
+    }
+
+    // Shooting (can't shoot while reloading)
+    this.shootCooldown = Math.max(0, this.shootCooldown - dt)
+    this.recoilTimer = Math.max(0, this.recoilTimer - dt)
+    this.muzzleFlashTimer = Math.max(0, this.muzzleFlashTimer - dt)
+
+    if (this.weapon === 'glock' && !this.reloading && input.shoot && this.shootCooldown <= 0 && this.magazineAmmo > 0) {
+      this.magazineAmmo--
+      this.shootCooldown = SHOOT_COOLDOWN
+      this.recoilTimer = RECOIL_DURATION
+      this.muzzleFlashTimer = FLASH_DURATION
+      this.shotFired = true
+
+      // Randomize flash scale for variation
+      const s = 0.8 + Math.random() * 0.6
+      this.muzzleFlash.scale.set(s, s, s)
+    }
+
+    // Muzzle flash visibility
+    const flashMat = this.muzzleFlash.material as THREE.MeshBasicMaterial
+    flashMat.opacity = this.muzzleFlashTimer > 0 ? 1 : 0
+    this.muzzleFlash.visible = this.muzzleFlashTimer > 0
+
     // Walk animation — faster when sprinting
     const isMoving = Math.abs(speed) > 0.1 || Math.abs(input.steering) > 0.1
     if (isMoving) this.walkTime += dt * Math.abs(speed) * 1.4
@@ -198,12 +335,52 @@ export class Player {
 
     this.leftLegGroup.rotation.x  =  swing
     this.rightLegGroup.rotation.x = -swing
-    this.leftArmGroup.rotation.x  = -swing * 0.5
-    this.rightArmGroup.rotation.x =  swing * 0.5
+
+    if (this.weapon === 'glock') {
+      // Right arm held forward aiming — recoil kicks it back briefly
+      const recoilKick = this.recoilTimer > 0 ? this.recoilTimer * 8 : 0
+      this.rightArmGroup.rotation.x = -1.2 + recoilKick
+      // Left arm still swings
+      this.leftArmGroup.rotation.x = -swing * 0.5
+    } else {
+      this.leftArmGroup.rotation.x  = -swing * 0.5
+      this.rightArmGroup.rotation.x =  swing * 0.5
+    }
 
     // Sync visual
     this.group.position.set(this.body.position.x, this.body.position.y - 0.4, this.body.position.z)
     this.group.rotation.y = this.heading
+  }
+
+  getWeapon(): WeaponType { return this.weapon }
+  getAmmo(): { magazine: number; reserve: number } {
+    return { magazine: this.magazineAmmo, reserve: this.reserveAmmo }
+  }
+  getMuzzleFlashActive(): boolean { return this.muzzleFlashTimer > 0 }
+  isReloading(): boolean { return this.reloading }
+
+  /** Apply damage — armor absorbs first, then health */
+  takeDamage(amount: number) {
+    if (this.dead) return
+    if (this.armor > 0) {
+      const armorDmg = Math.min(this.armor, amount)
+      this.armor -= armorDmg
+      amount -= armorDmg
+    }
+    if (amount > 0) {
+      this.health = Math.max(0, this.health - amount)
+    }
+    if (this.health <= 0) {
+      this.dead = true
+      this.deathTimer = this.RESPAWN_DELAY
+    }
+  }
+
+  /** Tick death timer, returns true when ready to respawn */
+  updateDeath(dt: number): boolean {
+    if (!this.dead) return false
+    this.deathTimer -= dt
+    return this.deathTimer <= 0
   }
 
   getCameraPitch(): number { return this.cameraPitch }

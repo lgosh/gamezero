@@ -291,6 +291,175 @@ export class SoundSystem {
     }
   }
 
+  // ─── Gunshot ──────────────────────────────────────────────────────────────
+
+  playGunshot() {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const t = ctx.currentTime
+
+    // Sharp transient crack — bandpass noise
+    const crackBuf = this.createNoiseBuffer(ctx, 0.06)
+    const crackSrc = ctx.createBufferSource()
+    crackSrc.buffer = crackBuf
+    const crackBp = ctx.createBiquadFilter()
+    crackBp.type = 'bandpass'
+    crackBp.frequency.value = 3000
+    crackBp.Q.value = 1.5
+    const crackGain = ctx.createGain()
+    crackGain.gain.setValueAtTime(0.9, t)
+    crackGain.gain.exponentialRampToValueAtTime(0.001, t + 0.06)
+    crackSrc.connect(crackBp)
+    crackBp.connect(crackGain)
+    crackGain.connect(this.masterGain)
+    crackSrc.start(t)
+    crackSrc.stop(t + 0.08)
+
+    // Low-frequency thud
+    const thudOsc = ctx.createOscillator()
+    thudOsc.type = 'sine'
+    thudOsc.frequency.value = 80
+    const thudGain = ctx.createGain()
+    thudGain.gain.setValueAtTime(0.6, t)
+    thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1)
+    thudOsc.connect(thudGain)
+    thudGain.connect(this.masterGain)
+    thudOsc.start(t)
+    thudOsc.stop(t + 0.12)
+
+    // Tail — longer noise decay
+    const tailBuf = this.createNoiseBuffer(ctx, 0.3)
+    const tailSrc = ctx.createBufferSource()
+    tailSrc.buffer = tailBuf
+    const tailLp = ctx.createBiquadFilter()
+    tailLp.type = 'lowpass'
+    tailLp.frequency.value = 1200
+    const tailGain = ctx.createGain()
+    tailGain.gain.setValueAtTime(0.15, t)
+    tailGain.gain.exponentialRampToValueAtTime(0.001, t + 0.3)
+    tailSrc.connect(tailLp)
+    tailLp.connect(tailGain)
+    tailGain.connect(this.masterGain)
+    tailSrc.start(t)
+    tailSrc.stop(t + 0.35)
+  }
+
+  playBulletHit() {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const t = ctx.currentTime
+
+    // Wet thud — lowpass noise
+    const buf = this.createNoiseBuffer(ctx, 0.08)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 600
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.5, t)
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.08)
+    src.connect(lp)
+    lp.connect(g)
+    g.connect(this.masterGain)
+    src.start(t)
+    src.stop(t + 0.1)
+  }
+
+  playDeath() {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const t = ctx.currentTime
+
+    // Low rumble — dramatic bass drop
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(60, t)
+    osc.frequency.exponentialRampToValueAtTime(20, t + 1.5)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.5, t)
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1.5)
+    osc.connect(g)
+    g.connect(this.masterGain)
+    osc.start(t)
+    osc.stop(t + 1.6)
+
+    // Noise whoosh
+    const buf = this.createNoiseBuffer(ctx, 1.5)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.setValueAtTime(400, t)
+    lp.frequency.exponentialRampToValueAtTime(80, t + 1.5)
+    const g2 = ctx.createGain()
+    g2.gain.setValueAtTime(0.2, t)
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 1.5)
+    src.connect(lp)
+    lp.connect(g2)
+    g2.connect(this.masterGain)
+    src.start(t)
+    src.stop(t + 1.6)
+  }
+
+  playReload() {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const t = ctx.currentTime
+
+    // Magazine eject click — sharp high-freq click
+    const clickBuf = this.createNoiseBuffer(ctx, 0.015)
+    const clickSrc = ctx.createBufferSource()
+    clickSrc.buffer = clickBuf
+    const clickHp = ctx.createBiquadFilter()
+    clickHp.type = 'highpass'
+    clickHp.frequency.value = 4000
+    const clickGain = ctx.createGain()
+    clickGain.gain.setValueAtTime(0.4, t)
+    clickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.03)
+    clickSrc.connect(clickHp)
+    clickHp.connect(clickGain)
+    clickGain.connect(this.masterGain)
+    clickSrc.start(t)
+    clickSrc.stop(t + 0.05)
+
+    // Magazine insert — metallic clunk at ~0.6s
+    const insertBuf = this.createNoiseBuffer(ctx, 0.04)
+    const insertSrc = ctx.createBufferSource()
+    insertSrc.buffer = insertBuf
+    const insertBp = ctx.createBiquadFilter()
+    insertBp.type = 'bandpass'
+    insertBp.frequency.value = 2500
+    insertBp.Q.value = 3
+    const insertGain = ctx.createGain()
+    insertGain.gain.setValueAtTime(0.5, t + 0.6)
+    insertGain.gain.exponentialRampToValueAtTime(0.001, t + 0.66)
+    insertSrc.connect(insertBp)
+    insertBp.connect(insertGain)
+    insertGain.connect(this.masterGain)
+    insertSrc.start(t + 0.6)
+    insertSrc.stop(t + 0.7)
+
+    // Slide rack — two quick metallic clicks at ~1.0s and ~1.15s
+    for (const offset of [1.0, 1.15]) {
+      const rackBuf = this.createNoiseBuffer(ctx, 0.025)
+      const rackSrc = ctx.createBufferSource()
+      rackSrc.buffer = rackBuf
+      const rackBp = ctx.createBiquadFilter()
+      rackBp.type = 'bandpass'
+      rackBp.frequency.value = 3500
+      rackBp.Q.value = 2
+      const rackGain = ctx.createGain()
+      rackGain.gain.setValueAtTime(0.35, t + offset)
+      rackGain.gain.exponentialRampToValueAtTime(0.001, t + offset + 0.04)
+      rackSrc.connect(rackBp)
+      rackBp.connect(rackGain)
+      rackGain.connect(this.masterGain)
+      rackSrc.start(t + offset)
+      rackSrc.stop(t + offset + 0.06)
+    }
+  }
+
   // ─── Horn ─────────────────────────────────────────────────────────────────
 
   private hornOsc: OscillatorNode | null = null
