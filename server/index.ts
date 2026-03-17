@@ -21,7 +21,7 @@ const players = new Map<string, PlayerState>()
 const sockets = new Map<string, any>()
 
 const PORT   = parseInt(process.env.PORT ?? '3001')
-const IS_PROD = !!process.env.FLY_APP_NAME  // Fly.io sets this automatically
+const IS_PROD = !!process.env.RENDER  // Render.com sets this automatically
 
 const server = Bun.serve<WSData>({
   port: PORT,

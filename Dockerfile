@@ -16,7 +16,7 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY server/index.ts ./server/
 
-EXPOSE 8080
-ENV PORT=8080
+EXPOSE 10000
+ENV PORT=10000
 
 CMD ["bun", "run", "server/index.ts"]
