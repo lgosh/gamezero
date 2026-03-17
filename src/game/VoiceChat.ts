@@ -10,7 +10,6 @@ export class VoiceChat {
   private mediaRecorder: MediaRecorder | null = null
   private network: NetworkManager
   private recording = false
-  private micRequested = false
 
   // Per-sender playback state using MediaSource for streaming
   private playbackSessions = new Map<string, {
@@ -41,9 +40,8 @@ export class VoiceChat {
     this.recording = true
     this.onLocalSpeaking?.(true)
 
-    // Request mic once, reuse the stream
-    if (!this.stream && !this.micRequested) {
-      this.micRequested = true
+    // Request mic each time (stream is released on stop so the red dot disappears)
+    if (!this.stream) {
       try {
         this.stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -90,6 +88,12 @@ export class VoiceChat {
       this.mediaRecorder.stop()
     }
     this.mediaRecorder = null
+
+    // Release the mic so the browser tab red dot disappears
+    if (this.stream) {
+      this.stream.getTracks().forEach(t => t.stop())
+      this.stream = null
+    }
 
     // Tell others we stopped
     this.network.sendVoiceStop()
