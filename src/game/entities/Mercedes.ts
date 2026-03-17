@@ -10,17 +10,17 @@ export class Mercedes extends Car {
     super(scene, physics)
 
     this.config = {
-      mass: 2045,
+      mass: 2045,              // AMG E63 S W213 curb weight ~2045 kg
       wheelRadius: 0.430,
-      wheelFriction: 1.50,
-      suspensionStiffness: 34,
-      suspensionRestLength: 0.35,
-      suspensionDamping: 2.4,
-      suspensionCompression: 4.5,
-      maxEngineForce: 7200,
-      maxBrakeForce: 145,
-      maxSteeringAngle: 0.48,
-      rollInfluence: 0.015,
+      wheelFriction: 1.60,     // Michelin Pilot Sport 4S — high-performance
+      suspensionStiffness: 38, // AMG adaptive dampers, firmer than stock
+      suspensionRestLength: 0.33,
+      suspensionDamping: 2.5,
+      suspensionCompression: 4.8,
+      maxEngineForce: 9200,    // 612 HP twin-turbo V8, 850 Nm torque
+      maxBrakeForce: 280,      // AMG high-performance composite brakes
+      maxSteeringAngle: 0.46,
+      rollInfluence: 0.012,
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.45, 2.4),
       chassisOffset: new CANNON.Vec3(0, 0.08, 0),
       wheelConnectionY: -0.05,

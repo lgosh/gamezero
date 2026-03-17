@@ -64,7 +64,7 @@ export default function ChatOverlay({ messages, onSend, disabled }: ChatOverlayP
   const recent = messages.slice(-50)
 
   return (
-    <div className="absolute bottom-36 left-4 w-80 pointer-events-none select-none">
+    <div className="absolute bottom-[340px] left-4 w-80 pointer-events-none select-none">
       {/* Message history */}
       <div
         ref={listRef}
@@ -99,15 +99,6 @@ export default function ChatOverlay({ messages, onSend, disabled }: ChatOverlayP
         </form>
       )}
 
-      {/* Hint */}
-      {!open && !disabled && (
-        <div
-          className="text-[11px] font-mono"
-          style={{ color: 'rgba(255,255,255,0.25)', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}
-        >
-          T — Chat
-        </div>
-      )}
     </div>
   )
 }

@@ -57,7 +57,7 @@ export class Player {
     this.buildMesh()
 
     // Sphere physics body — radius 0.4, center at feet+0.4
-    this.body = new CANNON.Body({ mass: 75, material: physics.groundMaterial })
+    this.body = new CANNON.Body({ mass: 5, material: physics.playerMaterial })
     this.body.addShape(new CANNON.Sphere(0.4))
     this.body.position.set(startPos.x, startPos.y + 0.4, startPos.z)
     this.body.linearDamping = 0.8 // Reduced from 0.95

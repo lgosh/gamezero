@@ -12,13 +12,13 @@ export class BMW extends Car {
     this.config = {
       mass: 1670,              // E34 M5 curb weight ~1670 kg
       wheelRadius: 0.420,
-      wheelFriction: 1.55,
+      wheelFriction: 1.55,     // period-correct sport tires
       suspensionStiffness: 35,
       suspensionRestLength: 0.35,
       suspensionDamping: 2.3,
       suspensionCompression: 4.4,
-      maxEngineForce: 6800,
-      maxBrakeForce: 150,
+      maxEngineForce: 6800,    // 315 HP naturally aspirated inline-6
+      maxBrakeForce: 220,      // standard ventilated disc brakes
       maxSteeringAngle: 0.46,
       rollInfluence: 0.015,
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.42, 2.4),

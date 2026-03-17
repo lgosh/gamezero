@@ -9,6 +9,7 @@ export class PhysicsWorld {
   carMaterial!: CANNON.Material
   buildingMaterial!: CANNON.Material
   propMaterial!: CANNON.Material
+  playerMaterial!: CANNON.Material
 
   constructor() {
     this.world = new CANNON.World({
@@ -27,6 +28,7 @@ export class PhysicsWorld {
     this.carMaterial = new CANNON.Material('car')
     this.buildingMaterial = new CANNON.Material('building')
     this.propMaterial = new CANNON.Material('prop')
+    this.playerMaterial = new CANNON.Material('player')
 
     const carGround = new CANNON.ContactMaterial(this.carMaterial, this.groundMaterial, {
       friction: 0.8,
@@ -46,10 +48,23 @@ export class PhysicsWorld {
       restitution: 0.05,
     })
 
+    // Player can't push cars — player bounces off but car is unaffected
+    const playerCar = new CANNON.ContactMaterial(this.playerMaterial, this.carMaterial, {
+      friction: 0.0,
+      restitution: 0.0,
+      contactEquationRelaxation: 10,
+    })
+    const playerGround = new CANNON.ContactMaterial(this.playerMaterial, this.groundMaterial, {
+      friction: 0.8,
+      restitution: 0.0,
+    })
+
     this.world.addContactMaterial(carGround)
     this.world.addContactMaterial(carBuilding)
     this.world.addContactMaterial(carCar)
     this.world.addContactMaterial(carProp)
+    this.world.addContactMaterial(playerCar)
+    this.world.addContactMaterial(playerGround)
   }
 
   /** Add a static box collider (for buildings, walls, etc.) */

@@ -31,6 +31,7 @@ export interface HUDState {
   playerPos?: { x: number; z: number }
   playerHeading?: number
   minimapCanvas?: HTMLCanvasElement
+  remotePlayers?: { x: number; z: number }[]
 }
 
 export class GameEngine {
@@ -491,11 +492,16 @@ export class GameEngine {
       currentPlayerPos = { x: pPos.x, z: pPos.z }
       currentHeading = Math.atan2(playerFwd.x, playerFwd.z)
 
+      const remotePositions2: { x: number; z: number }[] = []
+      for (const [, rs] of this.remoteStates) {
+        remotePositions2.push({ x: rs.pos[0], z: rs.pos[2] })
+      }
       this.lastHUDState = {
         speed: 0, rpm: 0, gear: 1, damage: this.car.damage,
         state: this.state, carType: this.car instanceof BMW ? 'bmw' : this.car instanceof Toyota ? 'toyota' : this.car instanceof BMWCS ? 'bmwcs' : 'mercedes', onFoot: true,
         playerPos: currentPlayerPos, playerHeading: currentHeading,
         minimapCanvas: this.map.minimapCanvas ?? undefined,
+        remotePlayers: remotePositions2,
       }
       this.onHUDUpdate?.(this.lastHUDState)
 
@@ -595,6 +601,12 @@ export class GameEngine {
     currentPlayerPos = { x: carPos.x, z: carPos.z }
     currentHeading = Math.atan2(carFwd.x, carFwd.z)
 
+    // Gather remote player positions for minimap
+    const remotePositions: { x: number; z: number }[] = []
+    for (const [, rs] of this.remoteStates) {
+      remotePositions.push({ x: rs.pos[0], z: rs.pos[2] })
+    }
+
     // HUD update
     this.lastHUDState = {
       speed: Math.round(speedKmh),
@@ -607,6 +619,7 @@ export class GameEngine {
       playerPos: currentPlayerPos,
       playerHeading: currentHeading,
       minimapCanvas: this.map.minimapCanvas ?? undefined,
+      remotePlayers: remotePositions,
     }
     this.onHUDUpdate?.(this.lastHUDState)
 
@@ -654,6 +667,14 @@ export class GameEngine {
 
     const carFwd = this.car.getForwardVector()
     const heading = Math.atan2(carFwd.x, carFwd.z)
+
+    // Stop the car gracefully before exiting
+    this.car.chassisBody.velocity.set(0, 0, 0)
+    this.car.chassisBody.angularVelocity.set(0, 0, 0)
+    for (let i = 0; i < this.car.vehicle.wheelInfos.length; i++) {
+      this.car.vehicle.applyEngineForce(0, i)
+      this.car.vehicle.setBrake(200, i)
+    }
 
     this.player = new Player(this.scene, this.physicsWorld, spawnPos, heading)
     this.car.chassisBody.sleep()
@@ -728,9 +749,10 @@ export class GameEngine {
       car.reset(pos.clone())
       setQ(car.chassisBody, pos)
       car.damage = 0
-      car.chassisBody.sleep()
       car.setHeadlights(false)
       car.uncull()
+      // Don't sleep — let cars fall to the ground from spawn height
+      car.chassisBody.wakeUp()
     }
 
     this.smoothCarYInit = false

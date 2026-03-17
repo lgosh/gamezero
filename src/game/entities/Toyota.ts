@@ -17,8 +17,8 @@ export class Toyota extends Car {
       suspensionRestLength: 0.40, // taller suspension travel
       suspensionDamping: 2.6,
       suspensionCompression: 4.2,
-      maxEngineForce: 5800,    // hybrid — torquey but less top-end than sport sedans
-      maxBrakeForce: 135,
+      maxEngineForce: 5800,    // 222 HP hybrid — torquey but less top-end than sport sedans
+      maxBrakeForce: 200,      // regenerative + disc brakes
       maxSteeringAngle: 0.52,  // tighter turning circle for SUV
       rollInfluence: 0.025,    // slightly more body roll (taller CG)
       chassisHalfExtents: new CANNON.Vec3(1.1, 0.55, 2.35),

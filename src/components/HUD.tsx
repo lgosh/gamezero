@@ -42,10 +42,11 @@ function FPSCounter() {
   )
 }
 
-function Minimap({ playerPos, playerHeading, minimapCanvas }: {
+function Minimap({ playerPos, playerHeading, minimapCanvas, remotePlayers }: {
   playerPos?: { x: number; z: number }
   playerHeading?: number
   minimapCanvas?: HTMLCanvasElement
+  remotePlayers?: { x: number; z: number }[]
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -97,6 +98,46 @@ function Minimap({ playerPos, playerHeading, minimapCanvas }: {
 
     ctx.restore()
 
+    // Remote player blips — GTA-style colored dots
+    if (remotePlayers && remotePlayers.length > 0 && playerPos) {
+      const MAP_RANGE = 900, MAP_SIZE = 512
+      const mapScale = MAP_SIZE / (2 * MAP_RANGE)
+      const VIEW_RADIUS = 200
+      const drawScale = (W / 2) / (VIEW_RADIUS * mapScale)
+      const heading = (playerHeading ?? 0) - Math.PI
+
+      for (const rp of remotePlayers) {
+        // Offset from local player in world coords
+        const dx = rp.x - playerPos.x
+        const dz = rp.z - playerPos.z
+
+        // Rotate by map heading
+        const cos = Math.cos(heading)
+        const sin = Math.sin(heading)
+        const rx = (dx * cos - dz * sin) * mapScale * drawScale
+        const ry = (dx * sin + dz * cos) * mapScale * drawScale
+
+        // Clamp to minimap circle edge if too far
+        const dist = Math.sqrt(rx * rx + ry * ry)
+        const maxR = W / 2 - 8
+        const scale = dist > maxR ? maxR / dist : 1
+        const sx = W / 2 + rx * scale
+        const sy = H / 2 + ry * scale
+
+        ctx.save()
+        ctx.fillStyle = '#38bdf8' // sky blue blip
+        ctx.strokeStyle = '#000000'
+        ctx.lineWidth = 1.5
+        ctx.shadowBlur = 3
+        ctx.shadowColor = '#000000'
+        ctx.beginPath()
+        ctx.arc(sx, sy, 5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
+
     // Player marker — white triangle pointing up, always at center
     ctx.save()
     ctx.translate(W/2, H/2)
@@ -114,7 +155,7 @@ function Minimap({ playerPos, playerHeading, minimapCanvas }: {
     ctx.stroke()
     ctx.restore()
 
-  }, [playerPos, playerHeading, minimapCanvas])
+  }, [playerPos, playerHeading, minimapCanvas, remotePlayers])
 
   return <canvas ref={canvasRef} width={160} height={160} className="shadow-2xl" style={{ borderRadius: '50%' }} />
 }
@@ -345,7 +386,7 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
 
       {/* ── Bottom-left: Minimap & Controls hint ─────────────────────────────── */}
       <div className="absolute bottom-6 left-6 pointer-events-none flex flex-col gap-4">
-        <Minimap playerPos={state.playerPos} playerHeading={state.playerHeading} minimapCanvas={state.minimapCanvas} />
+        <Minimap playerPos={state.playerPos} playerHeading={state.playerHeading} minimapCanvas={state.minimapCanvas} remotePlayers={state.remotePlayers} />
         {state.onFoot ? (
           <div className="hud-panel px-3 py-2 text-[11px] text-white/35 font-mono leading-5">
             <div>W / ↑ — Walk forward</div>

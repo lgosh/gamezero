@@ -10,17 +10,17 @@ export class BMWCS extends Car {
     super(scene, physics)
 
     this.config = {
-      mass: 1670,              // E34 M5 curb weight ~1670 kg
-      wheelRadius: 0.420,
-      wheelFriction: 1.55,
-      suspensionStiffness: 35,
-      suspensionRestLength: 0.35,
-      suspensionDamping: 2.3,
-      suspensionCompression: 4.4,
-      maxEngineForce: 6800,
-      maxBrakeForce: 150,
-      maxSteeringAngle: 0.46,
-      rollInfluence: 0.015,
+      mass: 1825,              // F90 M5 CS curb weight ~1825 kg
+      wheelRadius: 0.430,
+      wheelFriction: 1.70,     // Michelin Pilot Sport Cup 2 — track tires
+      suspensionStiffness: 45, // stiffer track-tuned suspension
+      suspensionRestLength: 0.30,
+      suspensionDamping: 2.8,
+      suspensionCompression: 5.0,
+      maxEngineForce: 9500,    // 635 HP twin-turbo V8
+      maxBrakeForce: 300,      // carbon-ceramic brakes
+      maxSteeringAngle: 0.44,
+      rollInfluence: 0.010,    // lower CG, less roll
       chassisHalfExtents: new CANNON.Vec3(1.0, 0.42, 2.4),
       chassisOffset: new CANNON.Vec3(0, 0.10, 0),
       wheelConnectionY: -0.05,
