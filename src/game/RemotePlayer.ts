@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { RemotePlayerData } from './NetworkManager'
 import { buildGlockMesh, buildMuzzleFlash } from './entities/Player'
+import { disposeObject3D } from './disposeObject3D'
 
 // ── Character colours (matching local Player) ─────────────────────────────
 const SKIN  = 0x3d2b1f
@@ -71,7 +72,7 @@ function buildPlayerGroup(): { group: THREE.Group; rightArmGroup: THREE.Group } 
 
 // ── Name tag sprite ────────────────────────────────────────────────────────
 function makeNameTag(nickname: string): THREE.Sprite {
-  const W = 256, H = 56
+  const W = 220, H = 42
   const canvas = document.createElement('canvas')
   canvas.width = W; canvas.height = H
   const ctx = canvas.getContext('2d')!
@@ -87,21 +88,54 @@ function makeNameTag(nickname: string): THREE.Sprite {
   ctx.fill()
 
   ctx.fillStyle = '#3b82f6'
-  ctx.fillRect(rx, ry, 4, rh)
+  ctx.fillRect(rx, ry, 3, rh)
 
   ctx.fillStyle = '#fff'
-  ctx.font = 'bold 22px Arial, sans-serif'
+  ctx.font = 'bold 18px Arial, sans-serif'
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
   ctx.fillText(nickname.toUpperCase(), W / 2, H / 2)
 
   const mat = new THREE.SpriteMaterial({
     map: new THREE.CanvasTexture(canvas),
-    depthTest: false, transparent: true,
+    depthTest: false, depthWrite: false, transparent: true,
   })
   const s = new THREE.Sprite(mat)
-  s.scale.set(3.2, 0.7, 1)
+  s.scale.set(2.2, 0.42, 1)
   s.renderOrder = 999
   return s
+}
+
+function makeSpeakingIndicator(): THREE.Sprite {
+  const canvas = document.createElement('canvas')
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')!
+
+  ctx.clearRect(0, 0, 64, 64)
+  ctx.fillStyle = 'rgba(16,185,129,0.95)'
+  ctx.beginPath()
+  ctx.arc(32, 32, 16, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.strokeStyle = '#d1fae5'
+  ctx.lineWidth = 4
+  for (const radius of [10, 16]) {
+    ctx.beginPath()
+    ctx.arc(32, 32, radius, -0.55, 0.55)
+    ctx.stroke()
+  }
+
+  const mat = new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas),
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+  })
+  const sprite = new THREE.Sprite(mat)
+  sprite.scale.set(0.36, 0.36, 1)
+  sprite.visible = false
+  sprite.renderOrder = 1000
+  return sprite
 }
 
 // ── RemotePlayer ───────────────────────────────────────────────────────────
@@ -112,10 +146,12 @@ export class RemotePlayer {
   private scene: THREE.Scene
   readonly footGroup: THREE.Group   // CJ character, shown when on foot — public for raycasting
   private nameTag: THREE.Sprite    // world-space, always visible + upright
+  private speakingIndicator: THREE.Sprite
   private rightArmGroup: THREE.Group
   private glockMesh: THREE.Group
   private muzzleFlash: THREE.Mesh
   private muzzleFlashTimer = 0
+  private speaking = false
 
   // Interpolation
   private currentPos  = new THREE.Vector3()
@@ -150,8 +186,15 @@ export class RemotePlayer {
     // Name tag always rendered in world space above the player
     this.nameTag = makeNameTag(data.nickname)
     scene.add(this.nameTag)
+    this.speakingIndicator = makeSpeakingIndicator()
+    scene.add(this.speakingIndicator)
 
     this.applyRemoteState(data)
+  }
+
+  setSpeaking(speaking: boolean) {
+    this.speaking = speaking
+    this.speakingIndicator.visible = speaking
   }
 
   applyRemoteState(data: RemotePlayerData) {
@@ -181,7 +224,7 @@ export class RemotePlayer {
     }
   }
 
-  update(dt: number) {
+  update(dt: number, viewerPos?: THREE.Vector3) {
     const alpha = Math.min(1, dt * 14)
     this.currentPos.lerp(this.targetPos, alpha)
     this.currentQuat.slerp(this.targetQuat, alpha)
@@ -199,14 +242,28 @@ export class RemotePlayer {
     this.footGroup.quaternion.copy(this.currentQuat)
 
     // Name tag: always visible above player (car height when driving, character height on foot)
-    const tagY = this.currentPos.y + (this.mode === 'driving' ? 3.2 : 2.6)
+    const tagY = this.currentPos.y + (this.mode === 'driving' ? 2.55 : 2.12)
     this.nameTag.position.set(this.currentPos.x, tagY, this.currentPos.z)
+    this.speakingIndicator.position.set(this.currentPos.x, tagY + 0.32, this.currentPos.z)
+
+    const distance = viewerPos ? viewerPos.distanceTo(this.currentPos) : 0
+    const fade = viewerPos
+      ? distance <= 10 ? 1 : distance >= 75 ? 0 : 1 - (distance - 10) / 65
+      : 1
+    const tagMat = this.nameTag.material as THREE.SpriteMaterial
+    tagMat.opacity = fade
+    this.nameTag.visible = fade > 0.02
+    const speakMat = this.speakingIndicator.material as THREE.SpriteMaterial
+    speakMat.opacity = fade
+    this.speakingIndicator.visible = this.speaking && fade > 0.02
   }
 
   dispose() {
+    disposeObject3D(this.footGroup)
+    disposeObject3D(this.nameTag)
+    disposeObject3D(this.speakingIndicator)
     this.scene.remove(this.footGroup)
     this.scene.remove(this.nameTag)
-    ;(this.nameTag.material as THREE.SpriteMaterial).map?.dispose()
-    this.nameTag.material.dispose()
+    this.scene.remove(this.speakingIndicator)
   }
 }

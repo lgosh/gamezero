@@ -6,6 +6,7 @@ import { SoundSystem } from './SoundSystem'
 import { CameraSystem } from './CameraSystem'
 import { ParticleSystem } from './ParticleSystem'
 import { OSMMap } from './world/OSMMap'
+import { AITrafficSystem } from './AITrafficSystem'
 import { BMW } from './entities/BMW'
 import { Mercedes } from './entities/Mercedes'
 import { Toyota } from './entities/Toyota'
@@ -42,6 +43,9 @@ export interface HUDState {
   health?: number
   dead?: boolean
   killFeed?: { killer: string; victim: string; weapon: string; time: number }[]
+  scoreboard?: { id: string; nickname: string; ping: number; kills: number; deaths: number; speaking?: boolean; local?: boolean }[]
+  connectionStatus?: 'offline' | 'connecting' | 'online'
+  localPing?: number
 }
 
 export class GameEngine {
@@ -66,6 +70,7 @@ export class GameEngine {
   private allCars: Car[] = []
   private player: Player | null = null
   private gameMode: GameMode = 'driving'
+  private aiTraffic: AITrafficSystem | null = null
 
   // Spawn anchor — set during init, reused by resetCar/respawn
   private spawnCx = -90
@@ -107,6 +112,7 @@ export class GameEngine {
   private voiceChat: VoiceChat | null = null
   private voiceSpeakers = new Set<string>()
   private localNickname = ''
+  private networkStatus: 'offline' | 'connecting' | 'online' = 'offline'
 
   // Noclip (free camera fly mode)
   private noclipMode = false
@@ -120,6 +126,8 @@ export class GameEngine {
   private killFeed: { killer: string; victim: string; weapon: string; time: number }[] = []
   private lastKiller: { nickname: string; weapon: string } | null = null
   private raycaster = new THREE.Raycaster()
+  private vehicleDecals: Array<{ parent: THREE.Object3D; mesh: THREE.Mesh }> = []
+  private bulletDecalTexture: THREE.CanvasTexture | null = null
 
   // Smoke timer
   private smokeTimer = 0
@@ -183,6 +191,8 @@ export class GameEngine {
     // ─── World ────────────────────────────────────────────────────────────────
     this.map = new OSMMap(this.scene, this.physicsWorld)
     await this.map.build()
+    this.aiTraffic = new AITrafficSystem(this.scene)
+    this.aiTraffic.init(this.map.getTrafficRoads())
 
     // ─── Cars — spawned in front of Old Town Hall, side by side, facing the monument ──
     const monX = -137, monZ = -136
@@ -270,8 +280,8 @@ export class GameEngine {
     setFacing(toyota.chassisBody, toyotaPos)
     setFacing(bmwcs.chassisBody, bmwcsPos)
 
-    // All cars parked at start — player spawns 10m behind cars so all 3 are visible
-    for (const c of this.allCars) c.chassisBody.sleep()
+    // Let all spawned cars settle onto the road before parking them.
+    this.settleAndParkCars(this.allCars)
     this.playerSpawnPos = new THREE.Vector3(
       this.spawnCx - toMonNx * 10,
       1.0,
@@ -285,8 +295,10 @@ export class GameEngine {
 
     // ─── Multiplayer ──────────────────────────────────────────────────────────
     if (nickname.trim()) {
+      this.networkStatus = 'connecting'
       this.network = new NetworkManager()
       this.network.onConnected = (_id, existing) => {
+        this.networkStatus = 'online'
         for (const p of existing) this.addRemotePlayer(p)
       }
       this.network.onPlayerJoined = (data) => this.addRemotePlayer(data)
@@ -331,6 +343,7 @@ export class GameEngine {
         this.voiceChat?.playRemoteAudio(id, data)
       }
       this.network.onVoiceSpeaking = (id, nickname, speaking) => {
+        this.remotePlayers.get(id)?.setSpeaking(speaking)
         if (speaking) {
           this.voiceSpeakers.add(nickname)
           this.voiceChat?.startRemoteSession(id)
@@ -342,6 +355,7 @@ export class GameEngine {
 
       // Clean up stale remote players on disconnect so reconnect starts fresh
       this.network.onDisconnected = () => {
+        this.networkStatus = 'connecting'
         for (const [id] of this.remotePlayers) this.removeRemotePlayer(id)
       }
       this.network.connect(nickname.trim())
@@ -354,6 +368,9 @@ export class GameEngine {
         else this.voiceSpeakers.delete(this.localNickname)
       }
     }
+    else {
+      this.networkStatus = 'offline'
+    }
 
     this.state = 'playing'
   }
@@ -361,22 +378,108 @@ export class GameEngine {
   private addRemotePlayer(data: RemotePlayerData) {
     if (this.remotePlayers.has(data.id)) return
     this.remoteStates.set(data.id, data)
-    this.remotePlayers.set(data.id, new RemotePlayer(this.scene, data))
+    const remotePlayer = new RemotePlayer(this.scene, data)
+    remotePlayer.setSpeaking(this.voiceSpeakers.has(data.nickname))
+    this.remotePlayers.set(data.id, remotePlayer)
   }
 
   private removeRemotePlayer(id: string) {
     const rp = this.remotePlayers.get(id)
     if (rp) { rp.dispose(); this.remotePlayers.delete(id) }
     this.remoteStates.delete(id)
+    this.restoreUnclaimedCars()
+  }
+
+  private getCarById(carId: string): Car {
+    return carId === 'bmw'
+      ? this.bmwCar
+      : carId === 'toyota'
+      ? this.toyotaCar
+      : carId === 'bmwcs'
+      ? this.bmwcsCar
+      : this.mercedesCar
+  }
+
+  private restoreUnclaimedCars() {
+    for (const car of this.allCars) {
+      if (car === this.car && this.gameMode === 'driving') continue
+
+      const carId = car === this.bmwCar ? 'bmw' : car === this.toyotaCar ? 'toyota' : car === this.bmwcsCar ? 'bmwcs' : 'mercedes'
+      const claimedByRemote = this.getRemoteDriverOf(carId)
+      if (claimedByRemote) continue
+
+      if (car.chassisBody.type === CANNON.Body.KINEMATIC) {
+        this.parkCar(car)
+      }
+    }
+  }
+
+  private clearVehicleInputs(car: Car, brakeForce = 0) {
+    for (let i = 0; i < car.vehicle.wheelInfos.length; i++) {
+      car.vehicle.applyEngineForce(0, i)
+      car.vehicle.setBrake(brakeForce, i)
+      car.vehicle.setSteeringValue(0, i)
+    }
+  }
+
+  private parkCar(car: Car) {
+    if (car.chassisBody.type !== CANNON.Body.DYNAMIC) {
+      car.chassisBody.type = CANNON.Body.DYNAMIC
+    }
+    car.chassisBody.velocity.setZero()
+    car.chassisBody.angularVelocity.setZero()
+    car.chassisBody.force.set(0, 0, 0)
+    car.chassisBody.torque.set(0, 0, 0)
+    this.clearVehicleInputs(car, 200)
+    car.chassisBody.sleep()
+    car.syncVisual()
+  }
+
+  private settleAndParkCars(cars: Car[], steps = 75) {
+    for (const car of cars) {
+      car.chassisBody.type = CANNON.Body.DYNAMIC
+      car.chassisBody.velocity.setZero()
+      car.chassisBody.angularVelocity.setZero()
+      car.chassisBody.force.set(0, 0, 0)
+      car.chassisBody.torque.set(0, 0, 0)
+      car.chassisBody.wakeUp()
+      this.clearVehicleInputs(car, 0)
+      car.syncVisual()
+    }
+
+    for (let i = 0; i < steps; i++) {
+      this.physicsWorld.step(1 / 60)
+    }
+
+    for (const car of cars) {
+      this.parkCar(car)
+    }
+  }
+
+  private maintainParkedCars() {
+    for (const car of this.allCars) {
+      if (car === this.car && this.gameMode === 'driving') continue
+
+      const carId = car === this.bmwCar ? 'bmw' : car === this.toyotaCar ? 'toyota' : car === this.bmwcsCar ? 'bmwcs' : 'mercedes'
+      if (this.getRemoteDriverOf(carId)) continue
+      if (car.chassisBody.type !== CANNON.Body.DYNAMIC) continue
+      if (car.chassisBody.sleepState === CANNON.Body.SLEEPING) continue
+
+      const linearSpeedSq = car.chassisBody.velocity.lengthSquared()
+      const angularSpeedSq = car.chassisBody.angularVelocity.lengthSquared()
+      if (linearSpeedSq < 0.2 && angularSpeedSq < 0.12) {
+        this.parkCar(car)
+      }
+    }
   }
 
   /** Smoothly interpolate remote cars to wherever the remote player is driving it. */
   private updateRemoteCars(dt: number) {
-    const alpha = Math.min(1, dt * 14) // Same interpolation speed as RemotePlayer
+    const alpha = 1 - Math.exp(-12 * dt)
 
     for (const state of this.remoteStates.values()) {
       if (state.mode !== 'driving' || !state.carId) continue
-      const car = state.carId === 'bmw' ? this.bmwCar : state.carId === 'toyota' ? this.toyotaCar : state.carId === 'bmwcs' ? this.bmwcsCar : this.mercedesCar
+      const car = this.getCarById(state.carId)
       
       // Never override a car the local player is currently driving
       if (car === this.car && this.gameMode === 'driving') {
@@ -395,11 +498,16 @@ export class GameEngine {
       }
 
       // LERP/SLERP towards the target network position
-      const targetPos = new CANNON.Vec3(state.pos[0], state.pos[1], state.pos[2])
+      const predictionSeconds = Math.min(0.12 + (state.ping ?? 0) / 1000 * 0.35, 0.22)
+      const targetPos = new CANNON.Vec3(
+        state.pos[0] + state.vel[0] * predictionSeconds,
+        state.pos[1] + state.vel[1] * predictionSeconds,
+        state.pos[2] + state.vel[2] * predictionSeconds,
+      )
       const targetQuat = new CANNON.Quaternion(state.quat[0], state.quat[1], state.quat[2], state.quat[3])
       
       // If it's too far (e.g. just spawned or teleported), snap instead of slow-lerping across the map
-      if (car.chassisBody.position.distanceTo(targetPos) > 10) {
+      if (car.chassisBody.position.distanceTo(targetPos) > 14) {
         car.chassisBody.position.copy(targetPos)
         car.chassisBody.quaternion.copy(targetQuat)
       } else {
@@ -409,6 +517,8 @@ export class GameEngine {
 
       car.syncVisual()
     }
+
+    this.restoreUnclaimedCars()
   }
 
   private getLocalCarId(): string | null {
@@ -519,7 +629,9 @@ export class GameEngine {
     // Physics step (always runs — keeps remote players alive during noclip too)
     this.physicsWorld.step(dt)
     this.updateRemoteCars(dt)
+    this.maintainParkedCars()
     this.map.syncProps()
+    this.aiTraffic?.update(dt)
     this.updateDrawDistance()
 
     // ── Noclip (free camera fly) ──────────────────────────────────────────
@@ -543,7 +655,7 @@ export class GameEngine {
       this.noclipPos.addScaledVector(right, speed * input.steering)
       this.camera.position.copy(this.noclipPos)
 
-      for (const rp of this.remotePlayers.values()) rp.update(dt)
+      for (const rp of this.remotePlayers.values()) rp.update(dt, this.camera.position)
       return
     }
 
@@ -622,6 +734,9 @@ export class GameEngine {
         health: this.player.health,
         dead: this.player.dead,
         killFeed: this.killFeed,
+        scoreboard: this.buildScoreboard(),
+        connectionStatus: this.networkStatus,
+        localPing: this.network?.getPingMs() ?? 0,
       }
       this.onHUDUpdate?.(this.lastHUDState)
 
@@ -631,7 +746,7 @@ export class GameEngine {
         this.networkSendTimer = 0
         this.sendNetworkState()
       }
-      for (const rp of this.remotePlayers.values()) rp.update(dt)
+      for (const rp of this.remotePlayers.values()) rp.update(dt, this.camera.position)
       return
     }
 
@@ -743,6 +858,9 @@ export class GameEngine {
       remotePlayers: remotePositions,
       voiceSpeakers: [...this.voiceSpeakers],
       killFeed: this.killFeed,
+      scoreboard: this.buildScoreboard(),
+      connectionStatus: this.networkStatus,
+      localPing: this.network?.getPingMs() ?? 0,
     }
     this.onHUDUpdate?.(this.lastHUDState)
 
@@ -752,7 +870,37 @@ export class GameEngine {
       this.networkSendTimer = 0
       this.sendNetworkState()
     }
-    for (const rp of this.remotePlayers.values()) rp.update(dt)
+    for (const rp of this.remotePlayers.values()) rp.update(dt, this.camera.position)
+  }
+
+  private buildScoreboard() {
+    const roster = this.network?.getRoster() ?? []
+    const localId = this.network?.id ?? ''
+    const speakingNames = this.voiceSpeakers
+    const board = roster.map((player) => ({
+      id: player.id,
+      nickname: player.nickname,
+      ping: player.id === localId ? this.network?.getPingMs() ?? player.ping : player.ping,
+      kills: player.kills ?? 0,
+      deaths: player.deaths ?? 0,
+      speaking: speakingNames.has(player.nickname),
+      local: player.id === localId,
+    }))
+
+    if (!board.length && this.localNickname) {
+      board.push({
+        id: localId || 'local',
+        nickname: this.localNickname,
+        ping: this.network?.getPingMs() ?? 0,
+        kills: 0,
+        deaths: 0,
+        speaking: speakingNames.has(this.localNickname),
+        local: true,
+      })
+    }
+
+    board.sort((a, b) => (b.kills - a.kills) || (a.deaths - b.deaths) || a.nickname.localeCompare(b.nickname))
+    return board
   }
 
   private sendNetworkState() {
@@ -764,6 +912,7 @@ export class GameEngine {
 
     if (this.gameMode === 'onfoot' && this.player) {
       const p = this.player.getPosition()
+      const pv = this.player.getVelocity()
       const fwd = this.player.getForwardVector()
       const yaw = Math.atan2(fwd.x, fwd.z)
       pos = [p.x, p.y, p.z]
@@ -780,7 +929,17 @@ export class GameEngine {
 
     const weapon = this.player?.getWeapon()
     const shooting = this.player?.getMuzzleFlashActive() || undefined
-    this.network.sendState({ pos, quat, vel, mode: this.gameMode, speedKmh, carId: this.getLocalCarId(), weapon, shooting })
+    this.network.sendState({
+      pos,
+      quat,
+      vel,
+      mode: this.gameMode,
+      speedKmh,
+      carId: this.getLocalCarId(),
+      ping: this.network.getPingMs(),
+      weapon,
+      shooting,
+    })
   }
 
   private performHitDetection() {
@@ -790,28 +949,110 @@ export class GameEngine {
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera)
     this.raycaster.far = 100
 
+    let bestPlayerHit: { id: string; hit: THREE.Intersection<THREE.Object3D> } | null = null
     for (const [id, rp] of this.remotePlayers) {
       if (rp.mode !== 'onfoot') continue
-      const intersects = this.raycaster.intersectObject(rp.footGroup, true)
-      if (intersects.length > 0) {
-        const hit = intersects[0]
-        // Walk up to find hitZone tag
-        let hitZone = 'body'
-        let obj: THREE.Object3D | null = hit.object
-        while (obj) {
-          if (obj.userData?.hitZone) { hitZone = obj.userData.hitZone; break }
-          obj = obj.parent
-        }
-        const damage = hitZone === 'head' ? 30 : 10
-
-        // Blood splatter at hit point
-        this.particleSystem.emitBlood(hit.point)
-        this.soundSystem.playBulletHit()
-
-        // Send hit to server → relayed to target
-        this.network?.sendHit(id, damage, hitZone)
-        break // one hit per shot
+      const hit = this.raycaster.intersectObject(rp.footGroup, true)[0]
+      if (!hit) continue
+      if (!bestPlayerHit || hit.distance < bestPlayerHit.hit.distance) {
+        bestPlayerHit = { id, hit }
       }
+    }
+
+    const nearestVehicleHit = this.findNearestVehicleHit()
+
+    if (nearestVehicleHit && (!bestPlayerHit || nearestVehicleHit.distance < bestPlayerHit.hit.distance)) {
+      this.reactToVehicleHit(nearestVehicleHit)
+      return
+    }
+
+    if (!bestPlayerHit) return
+
+    let hitZone = 'body'
+    let obj: THREE.Object3D | null = bestPlayerHit.hit.object
+    while (obj) {
+      if (obj.userData?.hitZone) { hitZone = obj.userData.hitZone; break }
+      obj = obj.parent
+    }
+    const damage = hitZone === 'head' ? 30 : 10
+
+    this.particleSystem.emitBlood(bestPlayerHit.hit.point)
+    this.soundSystem.playBulletHit()
+    this.network?.sendHit(bestPlayerHit.id, damage, hitZone)
+  }
+
+  private findNearestVehicleHit() {
+    let nearestHit: THREE.Intersection<THREE.Object3D> | null = null
+    const targets: THREE.Object3D[] = []
+    for (const car of this.allCars) targets.push(car.group, ...car.wheelMeshes)
+    if (this.aiTraffic) targets.push(...this.aiTraffic.getRaycastTargets())
+
+    for (const target of targets) {
+      const hit = this.raycaster.intersectObject(target, true)[0]
+      if (!hit) continue
+      if (!nearestHit || hit.distance < nearestHit.distance) nearestHit = hit
+    }
+    return nearestHit
+  }
+
+  private reactToVehicleHit(hit: THREE.Intersection<THREE.Object3D>) {
+    this.particleSystem.emitSparks(hit.point, 5)
+    this.spawnVehicleDecal(hit)
+  }
+
+  private getBulletDecalTexture() {
+    if (this.bulletDecalTexture) return this.bulletDecalTexture
+
+    const canvas = document.createElement('canvas')
+    canvas.width = 128
+    canvas.height = 128
+    const ctx = canvas.getContext('2d')!
+    ctx.clearRect(0, 0, 128, 128)
+
+    const gradient = ctx.createRadialGradient(64, 64, 8, 64, 64, 44)
+    gradient.addColorStop(0, 'rgba(15,15,15,0.9)')
+    gradient.addColorStop(0.45, 'rgba(20,20,20,0.65)')
+    gradient.addColorStop(1, 'rgba(20,20,20,0)')
+    ctx.fillStyle = gradient
+    ctx.beginPath()
+    ctx.arc(64, 64, 44, 0, Math.PI * 2)
+    ctx.fill()
+
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.needsUpdate = true
+    this.bulletDecalTexture = tex
+    return tex
+  }
+
+  private spawnVehicleDecal(hit: THREE.Intersection<THREE.Object3D>) {
+    const parent = hit.object
+    const worldNormal = hit.face
+      ? hit.face.normal.clone().transformDirection(parent.matrixWorld).normalize()
+      : this.raycaster.ray.direction.clone().negate()
+    const localPoint = parent.worldToLocal(hit.point.clone().addScaledVector(worldNormal, 0.02))
+    const localLookAt = parent.worldToLocal(hit.point.clone().add(worldNormal))
+
+    const decal = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.18, 0.18),
+      new THREE.MeshBasicMaterial({
+        map: this.getBulletDecalTexture(),
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+      }),
+    )
+    decal.position.copy(localPoint)
+    decal.lookAt(localLookAt)
+    decal.rotateZ(Math.random() * Math.PI * 2)
+    parent.add(decal)
+    this.vehicleDecals.push({ parent, mesh: decal })
+
+    while (this.vehicleDecals.length > 10) {
+      const oldest = this.vehicleDecals.shift()!
+      oldest.parent.remove(oldest.mesh)
+      oldest.mesh.geometry.dispose()
+      ;(oldest.mesh.material as THREE.Material).dispose()
     }
   }
 
@@ -825,16 +1066,8 @@ export class GameEngine {
     const carFwd = this.car.getForwardVector()
     const heading = Math.atan2(carFwd.x, carFwd.z)
 
-    // Stop the car gracefully before exiting
-    this.car.chassisBody.velocity.set(0, 0, 0)
-    this.car.chassisBody.angularVelocity.set(0, 0, 0)
-    for (let i = 0; i < this.car.vehicle.wheelInfos.length; i++) {
-      this.car.vehicle.applyEngineForce(0, i)
-      this.car.vehicle.setBrake(200, i)
-    }
-
     this.player = new Player(this.scene, this.physicsWorld, spawnPos, heading)
-    this.car.chassisBody.sleep()
+    this.parkCar(this.car)
     this.car.setHeadlights(false)
     this.soundSystem.stopEngineKey()
     this.gameMode = 'onfoot'
@@ -870,6 +1103,12 @@ export class GameEngine {
       this.car = closest
       this.car.useInterpolatedSync = true
     }
+    if (this.car.chassisBody.type !== CANNON.Body.DYNAMIC) {
+      this.car.chassisBody.type = CANNON.Body.DYNAMIC
+    }
+    this.clearVehicleInputs(this.car, 0)
+    this.car.chassisBody.velocity.setZero()
+    this.car.chassisBody.angularVelocity.setZero()
 
     this.player.dispose()
     this.player = null
@@ -908,10 +1147,8 @@ export class GameEngine {
       car.damage = 0
       car.setHeadlights(false)
       car.uncull()
-      // Ensure DYNAMIC so cars fall to ground (updateRemoteCars may have set KINEMATIC)
-      car.chassisBody.type = CANNON.Body.DYNAMIC
-      car.chassisBody.wakeUp()
     }
+    this.settleAndParkCars(this.allCars)
 
     // Clear stale remote driving states so updateRemoteCars doesn't override reset positions
     for (const [id, state] of this.remoteStates) {
@@ -999,8 +1236,20 @@ export class GameEngine {
     window.removeEventListener('resize', this.onResize)
     this.inputManager?.destroy()
     this.soundSystem?.destroy()
-    this.car?.dispose()
-    this.parkedCar?.dispose()
+    this.player?.dispose()
+    this.particleSystem?.clear()
+    for (const car of new Set(this.allCars)) car.dispose()
+    this.allCars = []
+    for (const decal of this.vehicleDecals) {
+      decal.parent.remove(decal.mesh)
+      decal.mesh.geometry.dispose()
+      ;(decal.mesh.material as THREE.Material).dispose()
+    }
+    this.vehicleDecals = []
+    this.bulletDecalTexture?.dispose()
+    this.bulletDecalTexture = null
+    this.aiTraffic?.destroy()
+    this.aiTraffic = null
     this.voiceChat?.destroy()
     this.network?.destroy()
     for (const rp of this.remotePlayers.values()) rp.dispose()
@@ -1009,4 +1258,3 @@ export class GameEngine {
     this.renderer?.dispose()
   }
 }
-

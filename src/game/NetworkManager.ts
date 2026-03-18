@@ -7,6 +7,7 @@ export interface LocalState {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null   // 'bmw' | 'mercedes' | 'toyota' | null
+  ping: number
   weapon?: 'fist' | 'glock'
   shooting?: boolean
 }
@@ -20,6 +21,9 @@ export interface RemotePlayerData {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null
+  ping: number
+  kills: number
+  deaths: number
   weapon?: 'fist' | 'glock'
   shooting?: boolean
 }
@@ -45,6 +49,7 @@ export class NetworkManager {
 
   // Heartbeat
   private pingInterval: ReturnType<typeof setInterval> | null = null
+  private pingMs = 0
 
   onPlayerJoined?: (data: RemotePlayerData) => void
   onPlayerLeft?: (id: string) => void
@@ -134,6 +139,11 @@ export class NetworkManager {
         this.onHit?.(msg.damage as number, msg.hitZone as string, msg.shooterId as string, msg.shooterNickname as string)
       } else if (msg.type === 'kill_feed') {
         this.onKillFeed?.(msg.killerNickname as string, msg.victimNickname as string, msg.weapon as string)
+      } else if (msg.type === 'pong') {
+        const sentAt = Number(msg.clientTime)
+        if (Number.isFinite(sentAt)) {
+          this.pingMs = Math.max(0, Math.round(performance.now() - sentAt))
+        }
       }
       // pong is silently consumed
     }
@@ -145,6 +155,9 @@ export class NetworkManager {
     this.ws.onclose = () => {
       console.log('[Network] Disconnected')
       this._stopHeartbeat()
+      this.pingMs = 0
+      this._lastStates = []
+      this.localId = null
       this.onDisconnected?.()
       this._scheduleReconnect()
     }
@@ -162,11 +175,15 @@ export class NetworkManager {
 
   private _startHeartbeat() {
     this._stopHeartbeat()
-    this.pingInterval = setInterval(() => {
+    const sendPing = () => {
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping' }))
+        this.ws.send(JSON.stringify({ type: 'ping', clientTime: performance.now() }))
       }
-    }, 15000) // ping every 15s
+    }
+    sendPing()
+    this.pingInterval = setInterval(() => {
+      sendPing()
+    }, 5000)
   }
 
   private _stopHeartbeat() {
@@ -235,11 +252,16 @@ export class NetworkManager {
 
   get id() { return this.localId }
   get connected() { return this.ws?.readyState === WebSocket.OPEN }
+  getPingMs() { return this.pingMs }
+  getRoster() { return this._lastStates }
 
   destroy() {
     this.destroyed = true
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
     this._stopHeartbeat()
+    this.pingMs = 0
+    this._lastStates = []
+    this.localId = null
     this.ws?.close()
     this.ws = null
   }

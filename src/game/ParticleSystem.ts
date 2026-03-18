@@ -159,6 +159,8 @@ export class ParticleSystem {
   clear() {
     for (const p of this.particles) {
       this.scene.remove(p.mesh)
+      p.mesh.geometry.dispose()
+      ;(p.mesh.material as THREE.MeshBasicMaterial).dispose()
     }
     this.particles = []
   }

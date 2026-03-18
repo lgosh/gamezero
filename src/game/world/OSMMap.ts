@@ -100,6 +100,7 @@ export class OSMMap {
   public  lighting!: LightingController
   public  minimapCanvas: HTMLCanvasElement | null = null
   private _landmarks    = new Map<LandmarkKey, LandmarkInfo>()
+  private trafficRoads: Array<{ pts: Array<[number, number]>; htype: string }> = []
 
   constructor(scene: THREE.Scene, physics: PhysicsWorld) {
     this.scene   = scene
@@ -112,6 +113,10 @@ export class OSMMap {
   getLandmark(key: LandmarkKey): { cx: number; cz: number } | undefined {
     const info = this._landmarks.get(key)
     return info ? { cx: info.cx, cz: info.cz } : undefined
+  }
+
+  getTrafficRoads(): Array<{ pts: Array<[number, number]>; htype: string }> {
+    return this.trafficRoads.map((road) => ({ pts: road.pts.map(([x, z]) => [x, z]), htype: road.htype }))
   }
 
   async build(): Promise<void> {
@@ -189,6 +194,7 @@ export class OSMMap {
       if (geo) pushGeo(roadGeos, color, geo)
       minimapRoads.push({ pts, htype })
     }
+    this.trafficRoads = minimapRoads
 
     // ── 3. Buildings ──────────────────────────────────────────────────────
     // Collect BuildingDef list; detect monument way
@@ -876,9 +882,13 @@ export class OSMMap {
     const statue = new THREE.Mesh(new THREE.SphereGeometry(1.4, 12, 10), goldMat)
     statue.position.set(cx, 41.4, cz); add(statue)
 
-    // Physics
-    this.physics.addStaticBox(new CANNON.Vec3(7.5, 1.5, 7.5), new CANNON.Vec3(cx, 1.5, cz))
-    this.physics.addStaticBox(new CANNON.Vec3(1.8, 18, 1.8), new CANNON.Vec3(cx, 20.7, cz))
+    // Physics: use cylinders so the collision matches the circular pedestal
+    // instead of creating invisible square corners around the monument ring.
+    this.physics.addStaticCylinder(7.0, 7.4, 1.0, new CANNON.Vec3(cx, 0.5, cz))
+    this.physics.addStaticCylinder(5.4, 5.9, 1.0, new CANNON.Vec3(cx, 1.5, cz))
+    this.physics.addStaticCylinder(4.0, 4.4, 1.2, new CANNON.Vec3(cx, 2.6, cz))
+    this.physics.addStaticCylinder(1.8, 2.3, 1.5, new CANNON.Vec3(cx, 3.95, cz))
+    this.physics.addStaticCylinder(1.7, 1.7, 32, new CANNON.Vec3(cx, 20.7, cz))
   }
 
   // ── Street lamps along Rustaveli Ave ──────────────────────────────────────

@@ -42,6 +42,7 @@ export class BMWCS extends Car {
   private async loadBody(): Promise<CANNON.Vec3[]> {
     // targetLength 4.95 matches Mercedes visual size
     const { bodyGroup } = await loadCarModel('/models/bmw_m5_cs.glb', 4.95)
+    this.restoreTaillightMaterials(bodyGroup)
 
     const { groups, positions } = extractWheels(bodyGroup, this.scene, 'bmw_m5_cs')
     mergeWheelGroups(groups)
@@ -53,5 +54,43 @@ export class BMWCS extends Car {
 
     this.chassisMesh.add(bodyGroup)
     return positions
+  }
+
+  private restoreTaillightMaterials(bodyGroup: THREE.Group) {
+    bodyGroup.traverse((obj) => {
+      const mesh = obj as THREE.Mesh
+      if (!mesh.isMesh) return
+
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      const next = materials.map((material) => {
+        const name = (material.name || '').toLowerCase()
+        const meshName = (mesh.name || '').toLowerCase()
+        const isRedLens = name === 'red_glass' || meshName.includes('red_glass')
+
+        if (!isRedLens) return material
+
+        const source = material as THREE.MeshStandardMaterial
+        const redLens = new THREE.MeshStandardMaterial()
+        redLens.name = material.name || 'BMWCS_RedGlass'
+        redLens.map = source.map ?? null
+        redLens.alphaMap = source.alphaMap ?? null
+        redLens.aoMap = source.aoMap ?? null
+        redLens.normalMap = source.normalMap ?? null
+        redLens.normalScale.copy(source.normalScale ?? new THREE.Vector2(1, 1))
+        redLens.color = new THREE.Color(0xd61f2f)
+        redLens.emissive = new THREE.Color(0x3d0208)
+        redLens.emissiveMap = source.map ?? null
+        redLens.emissiveIntensity = 0.26
+        redLens.metalness = 0.02
+        redLens.roughness = 0.18
+        redLens.transparent = true
+        redLens.opacity = 0.9
+        redLens.depthWrite = false
+        redLens.toneMapped = true
+        return redLens
+      })
+
+      mesh.material = Array.isArray(mesh.material) ? next : next[0]
+    })
   }
 }

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import type { PhysicsWorld } from '../PhysicsWorld'
 import type { InputState } from '../InputManager'
+import { disposeObject3D } from '../disposeObject3D'
 
 const SKIN   = 0x3d2b1f // CJ Skin tone
 const SHIRT  = 0xffffff // White tank top
@@ -399,6 +400,7 @@ export class Player {
 
   dispose() {
     this.physics.world.removeBody(this.body)
+    disposeObject3D(this.group)
     this.scene.remove(this.group)
   }
 }

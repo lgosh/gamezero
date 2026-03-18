@@ -15,6 +15,9 @@ interface PlayerState {
   mode: 'driving' | 'onfoot'
   speedKmh: number
   carId: string | null
+  ping: number
+  kills: number
+  deaths: number
   weapon?: 'fist' | 'glock'
   shooting?: boolean
 }
@@ -83,7 +86,7 @@ const server = Bun.serve<WSData>({
         const state: PlayerState = {
           id, nickname,
           pos: [0, 2, 35], quat: [0, 0, 0, 1], vel: [0, 0, 0],
-          mode: 'onfoot', speedKmh: 0, carId: null,
+          mode: 'onfoot', speedKmh: 0, carId: null, ping: 0, kills: 0, deaths: 0,
         }
         players.set(id, state)
         sockets.set(id, ws)
@@ -93,7 +96,7 @@ const server = Bun.serve<WSData>({
           id,
           players: [...players.values()].filter(p => p.id !== id),
         }))
-        broadcast(id, { type: 'player_joined', id, nickname })
+        broadcast(id, { type: 'player_joined', ...state })
         console.log(`[join] ${nickname} — ${players.size} online`)
         return
       }
@@ -107,8 +110,14 @@ const server = Bun.serve<WSData>({
         player.mode     = msg.mode     as PlayerState['mode']
         player.speedKmh = msg.speedKmh as number
         player.carId    = (msg.carId   as string | null) ?? null
+        player.ping     = Number.isFinite(msg.ping) ? Math.max(0, Math.round(msg.ping as number)) : player.ping
         player.weapon   = (msg.weapon  as PlayerState['weapon']) ?? undefined
         player.shooting = (msg.shooting as boolean) ?? undefined
+        return
+      }
+
+      if (msg.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong', clientTime: msg.clientTime }))
         return
       }
 
@@ -150,15 +159,20 @@ const server = Bun.serve<WSData>({
       }
 
       if (msg.type === 'killed') {
-        const player = players.get(id)
-        if (!player) return
+        const victim = players.get(id)
+        if (!victim) return
+        victim.deaths++
+        const killerId = msg.killerId as string | undefined
+        const killer = killerId ? players.get(killerId) : undefined
+        if (killer && killer.id !== victim.id) killer.kills++
+
         broadcastAll({
           type: 'kill_feed',
-          killerNickname: msg.killerNickname,
-          victimNickname: player.nickname,
+          killerNickname: killer?.nickname ?? (msg.killerNickname as string),
+          victimNickname: victim.nickname,
           weapon: msg.weapon,
         })
-        console.log(`[kill] ${msg.killerNickname} killed ${player.nickname}`)
+        console.log(`[kill] ${killer?.nickname ?? msg.killerNickname} killed ${victim.nickname}`)
         return
       }
 

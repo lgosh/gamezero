@@ -45,6 +45,7 @@ export class BMW extends Car {
 
     const { groups, positions } = extractWheels(bodyGroup, this.scene, 'bmw_e34')
     mergeWheelGroups(groups)
+    this.applyWheelGeometryCamberFix(groups)
     this.wheelMeshes = groups
     mergeBodyGeometry(bodyGroup)
 
@@ -53,5 +54,22 @@ export class BMW extends Car {
 
     this.chassisMesh.add(bodyGroup)
     return positions
+  }
+
+  private applyWheelGeometryCamberFix(groups: THREE.Group[]) {
+    const camberFix = THREE.MathUtils.degToRad(10)
+    const rotations = [camberFix, -camberFix, camberFix, -camberFix]
+
+    groups.forEach((group, index) => {
+      const angle = rotations[index] ?? 0
+      if (!angle) return
+
+      group.traverse((obj) => {
+        const mesh = obj as THREE.Mesh
+        if (!mesh.isMesh) return
+        mesh.geometry.rotateZ(angle)
+        mesh.geometry.computeBoundingSphere()
+      })
+    })
   }
 }

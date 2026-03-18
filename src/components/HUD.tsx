@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { HUDState } from '../game/GameEngine'
 
 interface HUDProps {
@@ -345,6 +345,26 @@ function GTAStats({ weapon, magazineAmmo, reserveAmmo, armor, health }: {
 export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggle, onBack, muted }: HUDProps) {
   const gearLabels: Record<number, string> = { 0: 'R', 1: 'N', 2: '1', 3: '2', 4: '3', 5: '4', 6: '5', 7: '6' }
   const gearDisplay = gearLabels[state.gear] ?? String(state.gear)
+  const [showScoreboard, setShowScoreboard] = useState(false)
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Tab') return
+      e.preventDefault()
+      setShowScoreboard(true)
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Tab') return
+      e.preventDefault()
+      setShowScoreboard(false)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+    }
+  }, [])
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
@@ -451,6 +471,66 @@ export default function HUD({ state, onReset, onPause, onMuteToggle, onTimeToggl
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {showScoreboard && state.scoreboard && (
+        <div className="absolute inset-0 flex items-start justify-center pt-16 pointer-events-none">
+          <div className="hud-panel w-[min(92vw,820px)] px-5 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-white font-bold tracking-[0.24em] text-sm uppercase" style={{ fontFamily: 'Rajdhani, sans-serif' }}>
+                  Online Players
+                </div>
+                <div className="text-white/45 text-[11px] font-mono mt-1">
+                  Hold TAB to view roster
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-mono uppercase tracking-wider text-white/45">Connection</div>
+                <div className="flex items-center gap-2 justify-end mt-1">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ background: state.connectionStatus === 'online' ? '#22c55e' : state.connectionStatus === 'connecting' ? '#f59e0b' : '#9ca3af' }}
+                  />
+                  <span className="text-white/90 text-sm font-mono">
+                    {state.connectionStatus === 'online' ? `ONLINE ${state.localPing ?? 0}ms` : state.connectionStatus === 'connecting' ? 'CONNECTING' : 'OFFLINE'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-[1.3fr_2fr_1fr_0.8fr_0.8fr_0.6fr] gap-3 px-3 py-2 text-[11px] font-mono uppercase tracking-wider text-white/40 border-b border-white/10">
+              <div>ID</div>
+              <div>Name</div>
+              <div>Ping</div>
+              <div>Kills</div>
+              <div>Deaths</div>
+              <div>VC</div>
+            </div>
+
+            <div className="flex flex-col">
+              {state.scoreboard.map((player) => (
+                <div
+                  key={player.id}
+                  className="grid grid-cols-[1.3fr_2fr_1fr_0.8fr_0.8fr_0.6fr] gap-3 px-3 py-2.5 text-sm border-b border-white/5"
+                  style={{ background: player.local ? 'rgba(59,130,246,0.10)' : 'transparent' }}
+                >
+                  <div className="text-white/70 font-mono text-xs">{player.id.slice(0, 12)}</div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`font-bold truncate ${player.local ? 'text-sky-300' : 'text-white'}`}>{player.nickname}</span>
+                    {player.local && <span className="text-[10px] font-mono text-sky-300/70">YOU</span>}
+                  </div>
+                  <div className="text-white/80 font-mono">{player.ping}ms</div>
+                  <div className="text-white/90 font-mono">{player.kills}</div>
+                  <div className="text-white/70 font-mono">{player.deaths}</div>
+                  <div className="flex items-center">
+                    {player.speaking ? <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" /> : <span className="w-2.5 h-2.5 rounded-full bg-white/15" />}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

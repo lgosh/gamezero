@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import type { PhysicsWorld } from '../PhysicsWorld'
 import type { InputState } from '../InputManager'
+import { disposeObject3D } from '../disposeObject3D'
 
 export interface CarConfig {
   mass: number
@@ -39,6 +40,15 @@ export class Car {
   wheelMeshes: THREE.Group[] = []
   private headlightLights: THREE.SpotLight[] = []
   private taillightMeshes: THREE.Mesh[] = []
+  private tempChassisPos = new THREE.Vector3()
+  private tempInterpChassisPos = new THREE.Vector3()
+  private tempWheelPos = new THREE.Vector3()
+  private tempLocalWheelPos = new THREE.Vector3()
+  private tempCurrentQuat = new THREE.Quaternion()
+  private tempInterpQuat = new THREE.Quaternion()
+  private tempInvCurrentQuat = new THREE.Quaternion()
+  private tempWheelQuat = new THREE.Quaternion()
+  private tempLocalWheelQuat = new THREE.Quaternion()
 
   // Physics
   vehicle!: CANNON.RaycastVehicle
@@ -381,10 +391,22 @@ export class Car {
     const off = this.config.chassisOffset
     this.chassisMesh.position.set(off.x, off.y, off.z)
 
-    // Compute translational delta to shift wheels when using interpolated chassis
-    const dx = useInterpolated ? pos.x - this.chassisBody.position.x : 0
-    const dy = useInterpolated ? pos.y - this.chassisBody.position.y : 0
-    const dz = useInterpolated ? pos.z - this.chassisBody.position.z : 0
+    if (useInterpolated) {
+      this.tempChassisPos.set(
+        this.chassisBody.position.x,
+        this.chassisBody.position.y,
+        this.chassisBody.position.z,
+      )
+      this.tempInterpChassisPos.set(pos.x, pos.y, pos.z)
+      this.tempCurrentQuat.set(
+        this.chassisBody.quaternion.x,
+        this.chassisBody.quaternion.y,
+        this.chassisBody.quaternion.z,
+        this.chassisBody.quaternion.w,
+      )
+      this.tempInterpQuat.set(quat.x, quat.y, quat.z, quat.w)
+      this.tempInvCurrentQuat.copy(this.tempCurrentQuat).invert()
+    }
 
     // Sync wheel meshes
     this.vehicle.wheelInfos.forEach((wheel, i) => {
@@ -392,8 +414,30 @@ export class Car {
       const t = wheel.worldTransform
       const wm = this.wheelMeshes[i]
       if (!wm) return
-      wm.position.set(t.position.x + dx, t.position.y + dy, t.position.z + dz)
-      wm.quaternion.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
+
+      if (!useInterpolated) {
+        wm.position.set(t.position.x, t.position.y, t.position.z)
+        wm.quaternion.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
+        return
+      }
+
+      this.tempWheelPos.set(t.position.x, t.position.y, t.position.z)
+      this.tempLocalWheelPos
+        .copy(this.tempWheelPos)
+        .sub(this.tempChassisPos)
+        .applyQuaternion(this.tempInvCurrentQuat)
+        .applyQuaternion(this.tempInterpQuat)
+        .add(this.tempInterpChassisPos)
+      wm.position.copy(this.tempLocalWheelPos)
+
+      this.tempWheelQuat.set(t.quaternion.x, t.quaternion.y, t.quaternion.z, t.quaternion.w)
+      this.tempLocalWheelQuat
+        .copy(this.tempInvCurrentQuat)
+        .multiply(this.tempWheelQuat)
+      this.tempWheelQuat
+        .copy(this.tempInterpQuat)
+        .multiply(this.tempLocalWheelQuat)
+      wm.quaternion.copy(this.tempWheelQuat)
     })
   }
 
@@ -520,8 +564,10 @@ export class Car {
 
   dispose() {
     this.vehicle?.removeFromWorld(this.physicsWorld.world)
+    disposeObject3D(this.group)
     this.scene.remove(this.group)
     for (const wm of this.wheelMeshes) {
+      disposeObject3D(wm)
       this.scene.remove(wm)
     }
   }

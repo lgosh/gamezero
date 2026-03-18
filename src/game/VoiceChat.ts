@@ -10,6 +10,9 @@ export class VoiceChat {
   private mediaRecorder: MediaRecorder | null = null
   private network: NetworkManager
   private recording = false
+  private starting = false
+  private wantsRecording = false
+  private startToken = 0
 
   // Per-sender playback state using MediaSource for streaming
   private playbackSessions = new Map<string, {
@@ -29,42 +32,54 @@ export class VoiceChat {
 
   /** Call every frame with the current voiceChat key state */
   update(pressed: boolean) {
-    if (pressed && !this.recording) {
-      this.startRecording()
-    } else if (!pressed && this.recording) {
+    this.wantsRecording = pressed
+
+    if (pressed && !this.recording && !this.starting) {
+      void this.startRecording()
+    } else if (!pressed && (this.recording || this.starting)) {
       this.stopRecording()
     }
   }
 
   private async startRecording() {
-    this.recording = true
-    this.onLocalSpeaking?.(true)
+    if (this.starting || this.recording || !this.wantsRecording) return
+    this.starting = true
+    const token = ++this.startToken
 
     // Request mic each time (stream is released on stop so the red dot disappears)
-    if (!this.stream) {
+    let stream = this.stream
+    if (!stream) {
       try {
-        this.stream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         })
       } catch (e) {
         console.warn('[VoiceChat] Mic access denied:', e)
-        this.recording = false
-        this.onLocalSpeaking?.(false)
+        if (token === this.startToken) this.starting = false
         return
       }
     }
-    if (!this.stream) {
-      this.recording = false
-      this.onLocalSpeaking?.(false)
+
+    if (!stream) {
+      if (token === this.startToken) this.starting = false
       return
     }
+
+    if (token !== this.startToken || !this.wantsRecording) {
+      stream.getTracks().forEach((track) => track.stop())
+      if (this.stream === stream) this.stream = null
+      if (token === this.startToken) this.starting = false
+      return
+    }
+
+    this.stream = stream
 
     // Create a new MediaRecorder each time K is pressed
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/webm'
 
-    const recorder = new MediaRecorder(this.stream, { mimeType, audioBitsPerSecond: 24000 })
+    const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
     this.mediaRecorder = recorder
 
     recorder.ondataavailable = (e) => {
@@ -73,16 +88,21 @@ export class VoiceChat {
       }
     }
 
-    // Notify others we started speaking
-    this.network.sendVoiceStart()
-
     // Send chunks every 200ms for reasonable latency vs chunk-decodability
     recorder.start(200)
+    this.recording = true
+    this.starting = false
+    this.onLocalSpeaking?.(true)
+    this.network.sendVoiceStart()
   }
 
   private stopRecording() {
+    this.wantsRecording = false
+    this.startToken++
+    const wasRecording = this.recording
     this.recording = false
-    this.onLocalSpeaking?.(false)
+    this.starting = false
+    if (wasRecording) this.onLocalSpeaking?.(false)
 
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop()
@@ -96,7 +116,7 @@ export class VoiceChat {
     }
 
     // Tell others we stopped
-    this.network.sendVoiceStop()
+    if (wasRecording) this.network.sendVoiceStop()
   }
 
   /** Called when a remote player starts speaking — set up a fresh MediaSource */
