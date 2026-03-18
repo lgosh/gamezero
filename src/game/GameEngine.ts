@@ -912,7 +912,6 @@ export class GameEngine {
 
     if (this.gameMode === 'onfoot' && this.player) {
       const p = this.player.getPosition()
-      const pv = this.player.getVelocity()
       const fwd = this.player.getForwardVector()
       const yaw = Math.atan2(fwd.x, fwd.z)
       pos = [p.x, p.y, p.z]
